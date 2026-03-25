@@ -31,8 +31,8 @@ export async function GET(request) {
       headers: {
         'x-apisports-key': API_KEY,
       },
-      // Cache for 60 seconds to save API quota
-      next: { revalidate: 60 },
+      // Cache for 5 minutes to save API quota (100 req/day on free plan)
+      next: { revalidate: 300 },
     });
 
     const data = await response.json();

@@ -36,28 +36,40 @@ async function apiFetch(endpoint, params = {}) {
 }
 
 // Get recent and upcoming matches for a specific league
+// Uses 'last' and 'next' params so there's ALWAYS content, even during breaks
 export async function getMatchesByLeague(leagueApiId) {
   const season = getCurrentSeason(leagueApiId);
   
-  // Get matches from last 7 days + next 7 days (covers international breaks)
-  const today = new Date();
-  const from = new Date(today);
-  from.setDate(from.getDate() - 7);
-  const to = new Date(today);
-  to.setDate(to.getDate() + 7);
-  
-  const fromStr = from.toISOString().split('T')[0];
-  const toStr = to.toISOString().split('T')[0];
-
-  const fixtures = await apiFetch('fixtures', {
-    league: leagueApiId,
-    season: season,
-    from: fromStr,
-    to: toStr,
-    timezone: 'Europe/Paris',
-  });
-
-  return fixtures.map(f => formatMatch(f));
+  try {
+    // Fetch last 5 played matches + next 5 upcoming (2 API calls per league)
+    const [lastMatches, nextMatches] = await Promise.all([
+      apiFetch('fixtures', { league: leagueApiId, season, last: 5, timezone: 'Europe/Paris' }),
+      apiFetch('fixtures', { league: leagueApiId, season, next: 5, timezone: 'Europe/Paris' }),
+    ]);
+    
+    // Combine, deduplicate by fixture id, and sort by date
+    const allFixtures = [...lastMatches, ...nextMatches];
+    const seen = new Set();
+    const unique = allFixtures.filter(f => {
+      const id = f.fixture.id;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    
+    // Sort: live first, then upcoming, then finished (most recent first)
+    const formatted = unique.map(f => formatMatch(f));
+    formatted.sort((a, b) => {
+      const order = { live: 0, upcoming: 1, finished: 2 };
+      if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
+      return 0; // keep API order within same status
+    });
+    
+    return formatted;
+  } catch (error) {
+    console.error(`Failed to fetch league ${leagueApiId}:`, error);
+    return [];
+  }
 }
 
 // Get live matches across all our leagues

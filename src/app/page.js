@@ -28,34 +28,29 @@ export default function Home() {
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [loadingLineups, setLoadingLineups] = useState(false);
   const [useRealData, setUseRealData] = useState(true);
-  const [matchCounts, setMatchCounts] = useState({});
 
-  // Fetch match counts for all leagues on home screen
+  // Fetch matches only when a league is selected (saves API quota)
   useEffect(() => {
-    if (!useRealData) return;
+    if (!selectedLeague || !useRealData) return;
+    // Skip if already fetched
+    if (realMatches[selectedLeague.id]) return;
     let cancelled = false;
-    async function fetchCounts() {
-      const counts = {};
-      for (const league of LEAGUES) {
-        try {
-          const matches = await getMatchesByLeague(league.apiId);
-          if (!cancelled) {
-            counts[league.id] = matches;
-            setRealMatches(prev => ({ ...prev, [league.id]: matches }));
-            setMatchCounts(prev => ({ ...prev, [league.id]: matches.length }));
-          }
-        } catch (e) {
-          console.warn(`Failed to fetch ${league.name}:`, e);
-          if (!cancelled) {
-            counts[league.id] = [];
-            setMatchCounts(prev => ({ ...prev, [league.id]: 0 }));
-          }
+    setLoadingMatches(true);
+    async function fetchLeagueMatches() {
+      try {
+        const matches = await getMatchesByLeague(selectedLeague.apiId);
+        if (!cancelled) {
+          setRealMatches(prev => ({ ...prev, [selectedLeague.id]: matches }));
         }
+      } catch (e) {
+        console.warn(`Failed to fetch ${selectedLeague.name}:`, e);
+      } finally {
+        if (!cancelled) setLoadingMatches(false);
       }
     }
-    fetchCounts();
+    fetchLeagueMatches();
     return () => { cancelled = true; };
-  }, [useRealData]);
+  }, [selectedLeague, useRealData]);
 
   // Fetch lineups when a match is selected
   useEffect(() => {
@@ -183,14 +178,7 @@ export default function Home() {
           background: 'rgba(231,76,60,0.08)', borderRadius: 12, border: '1px solid rgba(231,76,60,0.2)',
         }}>
           <PulsingDot /><span style={{ fontSize: 13, fontWeight: 600, color: t.live }}>
-            {(() => {
-              const allMatches = Object.values(realMatches).flat();
-              const liveCount = allMatches.filter(m => m.status === 'live').length;
-              if (liveCount > 0) return `${liveCount} match${liveCount > 1 ? 's' : ''} en direct`;
-              const totalMatches = allMatches.length;
-              if (totalMatches > 0) return `${totalMatches} match${totalMatches > 1 ? 's' : ''} cette semaine`;
-              return 'Chargement des matchs...';
-            })()}
+            Note les joueurs, donne ton verdict
           </span>
         </div>
         <div style={{
@@ -211,9 +199,9 @@ export default function Home() {
           <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 14 }}>Compétitions</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {LEAGUES.map((league, i) => {
-              const matches = realMatches[league.id] || MOCK_MATCHES[league.id] || [];
-              const liveCount = matches.filter(m => m.status === 'live').length;
-              const matchCount = matchCounts[league.id] !== undefined ? matchCounts[league.id] : (MOCK_MATCHES[league.id] || []).length;
+              const cachedMatches = realMatches[league.id];
+              const matchCount = cachedMatches ? cachedMatches.length : null;
+              const liveCount = cachedMatches ? cachedMatches.filter(m => m.status === 'live').length : 0;
               return (
                 <div key={league.id}
                   onClick={() => { setSelectedLeague(league); setScreen('league'); setBottomNav('home'); }}
@@ -228,7 +216,7 @@ export default function Home() {
                   <span style={{ fontSize: 26 }}>{league.flag}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 15, fontWeight: 700 }}>{league.name}</div>
-                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{matchCount} match{matchCount > 1 ? 's' : ''}</div>
+                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{matchCount !== null ? `${matchCount} match${matchCount > 1 ? 's' : ''}` : 'Voir les matchs'}</div>
                   </div>
                   {liveCount > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(231,76,60,0.15)', padding: '4px 10px', borderRadius: 20 }}>
@@ -365,7 +353,8 @@ export default function Home() {
   // LEAGUE SCREEN
   // ══════════════════════════════════════
   if (screen === 'league') {
-    const matches = realMatches[selectedLeague.id] || MOCK_MATCHES[selectedLeague.id] || [];
+    const matches = realMatches[selectedLeague.id] || [];
+    const isLoading = loadingMatches && matches.length === 0;
     return (
       <div style={baseStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 24px', justifyContent: 'space-between' }}>
@@ -381,6 +370,24 @@ export default function Home() {
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
         </div>
         <div style={{ padding: '0 24px 100px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {isLoading && (
+            <div style={{ textAlign: 'center', padding: '60px 20px', animation: 'fadeIn 0.3s ease' }}>
+              <div style={{ fontSize: 40, marginBottom: 16 }}>⚽</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: t.textDim }}>Chargement des matchs...</div>
+            </div>
+          )}
+          {!isLoading && matches.length === 0 && (
+            <div style={{
+              textAlign: 'center', padding: '60px 20px',
+              background: t.card, borderRadius: 20, border: `1px solid ${t.border}`,
+            }}>
+              <div style={{ fontSize: 40, marginBottom: 16 }}>📅</div>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Pas de match cette semaine</div>
+              <div style={{ fontSize: 13, color: t.textDim, lineHeight: 1.5 }}>
+                Trêve internationale ou intersaison. Les matchs réapparaîtront automatiquement à la reprise du championnat.
+              </div>
+            </div>
+          )}
           {matches.map((match, i) => (
             <div key={match.id}
               onClick={() => { setSelectedMatch(match); setScreen('match'); setSelectedTeamTab('home'); setBottomNav('home'); }}

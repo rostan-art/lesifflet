@@ -1,7 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { themes } from '../data/themes';
-import { LEAGUES, MOCK_MATCHES, MOCK_COMMENTS, REACTION_EMOJIS, LEADERBOARD, BADGES_INFO, BEST_XI, generatePlayers } from '../data/mockData';
+import { LEAGUES as MOCK_LEAGUES, MOCK_MATCHES, MOCK_COMMENTS, REACTION_EMOJIS, LEADERBOARD, BADGES_INFO, BEST_XI, generatePlayers } from '../data/mockData';
+import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar, PitchView } from '../components/UI';
 
 export default function Home() {
@@ -22,6 +23,70 @@ export default function Home() {
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(null);
   const [userReactions, setUserReactions] = useState({});
   const [commentSort, setCommentSort] = useState('hot');
+  const [realMatches, setRealMatches] = useState({});
+  const [realLineups, setRealLineups] = useState(null);
+  const [loadingMatches, setLoadingMatches] = useState(false);
+  const [loadingLineups, setLoadingLineups] = useState(false);
+  const [useRealData, setUseRealData] = useState(true);
+  const [matchCounts, setMatchCounts] = useState({});
+
+  // Fetch match counts for all leagues on home screen
+  useEffect(() => {
+    if (!useRealData) return;
+    let cancelled = false;
+    async function fetchCounts() {
+      const counts = {};
+      for (const league of LEAGUES) {
+        try {
+          const matches = await getMatchesByLeague(league.apiId);
+          if (!cancelled) {
+            counts[league.id] = matches;
+            setRealMatches(prev => ({ ...prev, [league.id]: matches }));
+            setMatchCounts(prev => ({ ...prev, [league.id]: matches.length }));
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch ${league.name}:`, e);
+          if (!cancelled) {
+            counts[league.id] = [];
+            setMatchCounts(prev => ({ ...prev, [league.id]: 0 }));
+          }
+        }
+      }
+    }
+    fetchCounts();
+    return () => { cancelled = true; };
+  }, [useRealData]);
+
+  // Fetch lineups when a match is selected
+  useEffect(() => {
+    if (!selectedMatch || !useRealData || !selectedMatch.fixtureId) return;
+    let cancelled = false;
+    setLoadingLineups(true);
+    async function fetchLineups() {
+      try {
+        const lineups = await getMatchLineups(selectedMatch.fixtureId);
+        if (!cancelled) setRealLineups(lineups);
+      } catch (e) {
+        console.warn('Failed to fetch lineups:', e);
+        if (!cancelled) setRealLineups(null);
+      } finally {
+        if (!cancelled) setLoadingLineups(false);
+      }
+    }
+    fetchLineups();
+    return () => { cancelled = true; };
+  }, [selectedMatch, useRealData]);
+
+  // Get players for the current match (real or mock)
+  function getPlayers() {
+    if (useRealData && realLineups) {
+      return {
+        home: realLineups.home?.starters || [],
+        away: realLineups.away?.starters || [],
+      };
+    }
+    return generatePlayers(selectedMatch?.id);
+  }
 
   const [communityRatings] = useState(() => {
     const cr = {};
@@ -71,7 +136,7 @@ export default function Home() {
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard' || screen === 'bestxi') { setScreen('home'); }
   };
@@ -117,7 +182,16 @@ export default function Home() {
           padding: '12px 0', margin: '0 24px 20px',
           background: 'rgba(231,76,60,0.08)', borderRadius: 12, border: '1px solid rgba(231,76,60,0.2)',
         }}>
-          <PulsingDot /><span style={{ fontSize: 13, fontWeight: 600, color: t.live }}>7 matchs en direct</span>
+          <PulsingDot /><span style={{ fontSize: 13, fontWeight: 600, color: t.live }}>
+            {(() => {
+              const allMatches = Object.values(realMatches).flat();
+              const liveCount = allMatches.filter(m => m.status === 'live').length;
+              if (liveCount > 0) return `${liveCount} match${liveCount > 1 ? 's' : ''} en direct`;
+              const totalMatches = allMatches.length;
+              if (totalMatches > 0) return `${totalMatches} match${totalMatches > 1 ? 's' : ''} cette semaine`;
+              return 'Chargement des matchs...';
+            })()}
+          </span>
         </div>
         <div style={{
           margin: '0 24px 20px', padding: '16px 20px',
@@ -137,8 +211,9 @@ export default function Home() {
           <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 14 }}>Compétitions</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {LEAGUES.map((league, i) => {
-              const matches = MOCK_MATCHES[league.id] || [];
+              const matches = realMatches[league.id] || MOCK_MATCHES[league.id] || [];
               const liveCount = matches.filter(m => m.status === 'live').length;
+              const matchCount = matchCounts[league.id] !== undefined ? matchCounts[league.id] : (MOCK_MATCHES[league.id] || []).length;
               return (
                 <div key={league.id}
                   onClick={() => { setSelectedLeague(league); setScreen('league'); setBottomNav('home'); }}
@@ -153,7 +228,7 @@ export default function Home() {
                   <span style={{ fontSize: 26 }}>{league.flag}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 15, fontWeight: 700 }}>{league.name}</div>
-                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{matches.length} match{matches.length > 1 ? 's' : ''}</div>
+                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{matchCount} match{matchCount > 1 ? 's' : ''}</div>
                   </div>
                   {liveCount > 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(231,76,60,0.15)', padding: '4px 10px', borderRadius: 20 }}>
@@ -290,7 +365,7 @@ export default function Home() {
   // LEAGUE SCREEN
   // ══════════════════════════════════════
   if (screen === 'league') {
-    const matches = MOCK_MATCHES[selectedLeague.id] || [];
+    const matches = realMatches[selectedLeague.id] || MOCK_MATCHES[selectedLeague.id] || [];
     return (
       <div style={baseStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 24px', justifyContent: 'space-between' }}>
@@ -330,13 +405,24 @@ export default function Home() {
                 <span style={{ fontSize: 11, color: t.textDim }}>{match.date}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ flex: 1, textAlign: 'center' }}><div style={{ fontSize: 18, fontWeight: 800 }}>{match.home}</div></div>
-                <div style={{
-                  fontSize: 26, fontWeight: 900, padding: '5px 18px', borderRadius: 12,
-                  background: match.status === 'live' ? 'rgba(231,76,60,0.1)' : t.toggleBg,
-                  fontVariantNumeric: 'tabular-nums',
-                }}>{match.score}</div>
-                <div style={{ flex: 1, textAlign: 'center' }}><div style={{ fontSize: 18, fontWeight: 800 }}>{match.away}</div></div>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  {match.homeLogo && <img src={match.homeLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', marginBottom: 4 }} />}
+                  <div style={{ fontSize: 16, fontWeight: 800 }}>{match.home}</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{
+                    fontSize: 26, fontWeight: 900, padding: '5px 18px', borderRadius: 12,
+                    background: match.status === 'live' ? 'rgba(231,76,60,0.1)' : t.toggleBg,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>{match.score}</div>
+                  {match.status === 'upcoming' && match.time && (
+                    <div style={{ fontSize: 11, color: t.accent, marginTop: 4, fontWeight: 600 }}>{match.time}</div>
+                  )}
+                </div>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  {match.awayLogo && <img src={match.awayLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', marginBottom: 4 }} />}
+                  <div style={{ fontSize: 16, fontWeight: 800 }}>{match.away}</div>
+                </div>
               </div>
               {communityRatings[match.id] && (
                 <div style={{
@@ -360,7 +446,8 @@ export default function Home() {
   // MATCH SCREEN
   // ══════════════════════════════════════
   if (screen === 'match') {
-    const players = generatePlayers(selectedMatch.id);
+    const players = getPlayers();
+    const hasRealLineups = useRealData && realLineups;
     const currentPlayers = selectedTeamTab === 'home' ? players.home : players.away;
     const ratedCount = Object.keys(playerRatings).length;
     const totalPlayers = [...players.home, ...players.away].length;
@@ -431,7 +518,27 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              {currentPlayers.map((player, i) => (
+              {loadingLineups && (
+                <div style={{ textAlign: 'center', padding: '40px 0', animation: 'fadeIn 0.3s ease' }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>⚽</div>
+                  <div style={{ fontSize: 14, color: t.textDim, fontWeight: 600 }}>Chargement des compositions...</div>
+                </div>
+              )}
+              {!loadingLineups && currentPlayers.length === 0 && (
+                <div style={{
+                  textAlign: 'center', padding: '40px 20px',
+                  background: t.card, borderRadius: 16, border: `1px solid ${t.border}`,
+                }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Compositions pas encore disponibles</div>
+                  <div style={{ fontSize: 12, color: t.textDim, lineHeight: 1.5 }}>
+                    {selectedMatch.status === 'upcoming'
+                      ? 'Les compositions seront disponibles environ 1h avant le coup d\'envoi.'
+                      : 'Les données de ce match ne sont pas disponibles pour le moment.'}
+                  </div>
+                </div>
+              )}
+              {!loadingLineups && currentPlayers.map((player, i) => (
                 <div key={player.id} style={{
                   display: 'flex', flexDirection: 'column', gap: 8,
                   padding: '12px 14px', marginBottom: 6, borderRadius: 14,

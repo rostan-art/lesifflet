@@ -35,16 +35,16 @@ async function apiFetch(endpoint, params = {}) {
   return data.response || [];
 }
 
-// Get today's matches for a specific league
+// Get recent and upcoming matches for a specific league
 export async function getMatchesByLeague(leagueApiId) {
   const season = getCurrentSeason(leagueApiId);
   
-  // Get matches from today and nearby dates (last 2 days + next 2 days)
+  // Get matches from last 7 days + next 7 days (covers international breaks)
   const today = new Date();
   const from = new Date(today);
-  from.setDate(from.getDate() - 2);
+  from.setDate(from.getDate() - 7);
   const to = new Date(today);
-  to.setDate(to.getDate() + 2);
+  to.setDate(to.getDate() + 7);
   
   const fromStr = from.toISOString().split('T')[0];
   const toStr = to.toISOString().split('T')[0];

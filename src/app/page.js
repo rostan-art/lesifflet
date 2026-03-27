@@ -61,18 +61,44 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [selectedLeague, useRealData]);
 
+  const [lineupDebug, setLineupDebug] = useState(null);
+
   // Fetch lineups when a match is selected
   useEffect(() => {
     if (!selectedMatch || !useRealData || !selectedMatch.fixtureId) return;
     let cancelled = false;
     setLoadingLineups(true);
+    setLineupDebug(null);
     async function fetchLineups() {
       try {
+        // Fetch raw match data for debug
+        const rawRes = await fetch(`/api/football?path=matches/${selectedMatch.fixtureId}`);
+        const rawData = await rawRes.json();
+        
+        if (!cancelled) {
+          // Check what lineup data is available
+          const homeLineup = rawData?.homeTeam?.lineup || [];
+          const awayLineup = rawData?.awayTeam?.lineup || [];
+          setLineupDebug({
+            hasHomeLineup: homeLineup.length > 0,
+            hasAwayLineup: awayLineup.length > 0,
+            homeCount: homeLineup.length,
+            awayCount: awayLineup.length,
+            homeTeamKeys: rawData?.homeTeam ? Object.keys(rawData.homeTeam) : [],
+            status: rawData?.status,
+            errorCode: rawData?.errorCode || null,
+            errorMsg: rawData?.message || null,
+          });
+        }
+
         const lineups = await getMatchLineups(selectedMatch.fixtureId);
         if (!cancelled) setRealLineups(lineups);
       } catch (e) {
         console.warn('Failed to fetch lineups:', e);
-        if (!cancelled) setRealLineups(null);
+        if (!cancelled) {
+          setRealLineups(null);
+          setLineupDebug({ error: e.message });
+        }
       } finally {
         if (!cancelled) setLoadingLineups(false);
       }
@@ -152,7 +178,7 @@ export default function Home() {
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setLineupDebug(null); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard' || screen === 'bestxi') { setScreen('home'); }
   };
@@ -570,6 +596,26 @@ export default function Home() {
                       ? 'Les compositions officielles sont publiées environ 1h avant le coup d\'envoi. Reviens un peu avant le match !'
                       : 'Les données arrivent, réessaie dans quelques instants.'}
                   </div>
+                  {/* Debug info */}
+                  {lineupDebug && (
+                    <div style={{
+                      marginTop: 16, padding: '10px 14px', borderRadius: 10,
+                      background: 'rgba(231,76,60,0.08)', border: '1px solid rgba(231,76,60,0.2)',
+                      fontSize: 10, color: t.textDim, fontFamily: 'monospace', textAlign: 'left',
+                    }}>
+                      <div>🔍 Lineup Debug (match #{selectedMatch.fixtureId}):</div>
+                      {lineupDebug.error && <div>❌ Error: {lineupDebug.error}</div>}
+                      {lineupDebug.errorCode && <div>❌ API: {lineupDebug.errorCode} - {lineupDebug.errorMsg}</div>}
+                      {!lineupDebug.error && !lineupDebug.errorCode && (
+                        <>
+                          <div>Status: {lineupDebug.status}</div>
+                          <div>Home lineup: {lineupDebug.homeCount} joueurs</div>
+                          <div>Away lineup: {lineupDebug.awayCount} joueurs</div>
+                          <div>HomeTeam keys: {lineupDebug.homeTeamKeys?.join(', ')}</div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
               {/* Rating lock banner */}

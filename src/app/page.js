@@ -61,7 +61,6 @@ export default function Home() {
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [loadingLineups, setLoadingLineups] = useState(false);
   const [useRealData, setUseRealData] = useState(true);
-  const [apiDebug, setApiDebug] = useState(null);
 
   // Fetch matches only when a league is selected (saves API quota)
   useEffect(() => {
@@ -69,19 +68,14 @@ export default function Home() {
     if (fetchedLeagues.has(selectedLeague.id)) return;
     let cancelled = false;
     setLoadingMatches(true);
-    setApiDebug(null);
     async function fetchLeagueMatches() {
       try {
         const matches = await getMatchesByLeague(selectedLeague.code);
         if (!cancelled) {
           setRealMatches(prev => ({ ...prev, [selectedLeague.id]: matches }));
-          setApiDebug({ success: true, count: matches.length, league: selectedLeague.name });
         }
       } catch (e) {
         console.warn(`Failed to fetch ${selectedLeague.name}:`, e);
-        if (!cancelled) {
-          setApiDebug({ success: false, error: e.message, league: selectedLeague.name });
-        }
       } finally {
         if (!cancelled) {
           setLoadingMatches(false);
@@ -93,14 +87,11 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [selectedLeague, useRealData]);
 
-  const [lineupDebug, setLineupDebug] = useState(null);
-
   // Fetch team squads when a match is selected
   useEffect(() => {
     if (!selectedMatch || !useRealData || !selectedMatch.fixtureId) return;
     let cancelled = false;
     setLoadingLineups(true);
-    setLineupDebug(null);
     async function fetchSquads() {
       try {
         const lineups = await getMatchLineups(
@@ -110,15 +101,11 @@ export default function Home() {
         );
         if (!cancelled) {
           setRealLineups(lineups);
-          const homeCount = lineups?.home?.starters?.length || 0;
-          const awayCount = lineups?.away?.starters?.length || 0;
-          setLineupDebug({ success: true, homeCount, awayCount });
         }
       } catch (e) {
         console.warn('Failed to fetch squads:', e);
         if (!cancelled) {
           setRealLineups(null);
-          setLineupDebug({ error: e.message });
         }
       } finally {
         if (!cancelled) setLoadingLineups(false);
@@ -252,7 +239,7 @@ export default function Home() {
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setLineupDebug(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard' || screen === 'bestxi') { setScreen('home'); }
   };
@@ -659,21 +646,6 @@ export default function Home() {
                       ? 'Les compositions officielles sont publiées environ 1h avant le coup d\'envoi. Reviens un peu avant le match !'
                       : 'Les données arrivent, réessaie dans quelques instants.'}
                   </div>
-                  {/* Debug info */}
-                  {lineupDebug && (
-                    <div style={{
-                      marginTop: 16, padding: '10px 14px', borderRadius: 10,
-                      background: lineupDebug.success ? 'rgba(0,230,118,0.08)' : 'rgba(231,76,60,0.08)',
-                      border: `1px solid ${lineupDebug.success ? 'rgba(0,230,118,0.2)' : 'rgba(231,76,60,0.2)'}`,
-                      fontSize: 10, color: t.textDim, fontFamily: 'monospace', textAlign: 'left',
-                    }}>
-                      <div>🔍 Squad Debug (match #{selectedMatch.fixtureId}):</div>
-                      {lineupDebug.error && <div>❌ Error: {lineupDebug.error}</div>}
-                      {lineupDebug.success && (
-                        <div>✅ Home: {lineupDebug.homeCount} joueurs | Away: {lineupDebug.awayCount} joueurs</div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
               {/* Rating lock banner */}

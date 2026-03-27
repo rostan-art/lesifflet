@@ -5,7 +5,7 @@ const nextConfig = {
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'media.api-sports.io',
+        hostname: 'crests.football-data.org',
       },
     ],
   },

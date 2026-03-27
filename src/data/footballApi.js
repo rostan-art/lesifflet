@@ -1,190 +1,145 @@
-// League IDs in API-Football
-export const LEAGUE_IDS = {
-  ligue1: 61,
-  premierleague: 39,
-  laliga: 140,
-  seriea: 135,
-  bundesliga: 78,
-  ucl: 2,
-  uel: 3,
-};
+// football-data.org API integration (v4)
+// Free tier: 10 req/min, current season, top competitions
 
+// Competition codes for football-data.org
 export const LEAGUES = [
-  { id: "ligue1", apiId: 61, name: "Ligue 1", flag: "🇫🇷" },
-  { id: "premierleague", apiId: 39, name: "Premier League", flag: "🇬🇧" },
-  { id: "laliga", apiId: 140, name: "La Liga", flag: "🇪🇸" },
-  { id: "seriea", apiId: 135, name: "Serie A", flag: "🇮🇹" },
-  { id: "bundesliga", apiId: 78, name: "Bundesliga", flag: "🇩🇪" },
-  { id: "ucl", apiId: 2, name: "Champions League", flag: "🏆" },
-  { id: "uel", apiId: 3, name: "Europa League", flag: "🥈" },
+  { id: "ligue1", code: "FL1", name: "Ligue 1", flag: "🇫🇷" },
+  { id: "premierleague", code: "PL", name: "Premier League", flag: "🇬🇧" },
+  { id: "laliga", code: "PD", name: "La Liga", flag: "🇪🇸" },
+  { id: "seriea", code: "SA", name: "Serie A", flag: "🇮🇹" },
+  { id: "bundesliga", code: "BL1", name: "Bundesliga", flag: "🇩🇪" },
+  { id: "ucl", code: "CL", name: "Champions League", flag: "🏆" },
 ];
 
-// Current season for each league
-export function getCurrentSeason(leagueId) {
-  // UCL/UEL use the starting year of the season
-  if (leagueId === 2 || leagueId === 3) return 2025;
-  return 2025;
-}
-
-// Fetch from our API route (never directly from API-Football)
-async function apiFetch(endpoint, params = {}) {
-  const searchParams = new URLSearchParams({ endpoint, ...params });
-  const url = `/api/football?${searchParams.toString()}`;
-  const res = await fetch(url);
+// Fetch from our API route (never directly from football-data.org)
+async function apiFetch(path) {
+  const res = await fetch(`/api/football?path=${encodeURIComponent(path)}`);
   if (!res.ok) throw new Error(`API HTTP error: ${res.status}`);
   const data = await res.json();
-  
-  // Check for API-Football errors in response
-  if (data.errors && Object.keys(data.errors).length > 0) {
-    console.error('API-Football errors:', data.errors);
-    throw new Error(`API error: ${JSON.stringify(data.errors)}`);
+
+  if (data.errorCode) {
+    throw new Error(`API error ${data.errorCode}: ${data.message}`);
   }
-  
-  console.log(`API fetch: ${endpoint} | params: ${searchParams.toString()} | results: ${data.results || 0}`);
-  return data.response || [];
+
+  return data;
 }
 
 // Get recent and upcoming matches for a specific league
-// Uses 'last' and 'next' params WITHOUT season (they conflict on free plan)
-export async function getMatchesByLeague(leagueApiId) {
+export async function getMatchesByLeague(leagueCode) {
   try {
-    // Fetch last 5 played + next 5 upcoming (no season param needed)
-    const [lastMatches, nextMatches] = await Promise.all([
-      apiFetch('fixtures', { league: leagueApiId, last: 5, timezone: 'Europe/Paris' }),
-      apiFetch('fixtures', { league: leagueApiId, next: 5, timezone: 'Europe/Paris' }),
-    ]);
-    
-    // Combine, deduplicate by fixture id
-    const allFixtures = [...lastMatches, ...nextMatches];
-    const seen = new Set();
-    const unique = allFixtures.filter(f => {
-      const id = f.fixture.id;
-      if (seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    });
-    
-    // Sort: live first, then upcoming, then finished
-    const formatted = unique.map(f => formatMatch(f));
-    formatted.sort((a, b) => {
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(from.getDate() - 14);
+    const to = new Date(today);
+    to.setDate(to.getDate() + 14);
+
+    const fromStr = from.toISOString().split('T')[0];
+    const toStr = to.toISOString().split('T')[0];
+
+    const data = await apiFetch(
+      `competitions/${leagueCode}/matches?dateFrom=${fromStr}&dateTo=${toStr}`
+    );
+
+    const matches = data.matches || [];
+    return matches.map(m => formatMatch(m)).sort((a, b) => {
       const order = { live: 0, upcoming: 1, finished: 2 };
-      if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
-      return 0;
+      return (order[a.status] || 2) - (order[b.status] || 2);
     });
-    
-    return formatted;
   } catch (error) {
-    console.error(`Failed to fetch league ${leagueApiId}:`, error);
+    console.error(`Failed to fetch ${leagueCode}:`, error);
     return [];
   }
 }
 
-// Get live matches across all our leagues
-export async function getLiveMatches() {
-  const leagueIds = Object.values(LEAGUE_IDS).join('-');
-  const fixtures = await apiFetch('fixtures', { live: leagueIds });
-  return fixtures.map(f => formatMatch(f));
-}
-
 // Get lineups for a specific match
-export async function getMatchLineups(fixtureId) {
-  const lineups = await apiFetch('fixtures/lineups', { fixture: fixtureId });
-  
-  if (!lineups || lineups.length === 0) return null;
+export async function getMatchLineups(matchId) {
+  try {
+    const data = await apiFetch(`matches/${matchId}`);
+    if (!data || !data.homeTeam || !data.awayTeam) return null;
 
-  return {
-    home: lineups[0] ? formatLineup(lineups[0]) : null,
-    away: lineups[1] ? formatLineup(lineups[1]) : null,
-  };
+    const homeLineup = data.homeTeam.lineup || [];
+    const awayLineup = data.awayTeam.lineup || [];
+    if (homeLineup.length === 0 && awayLineup.length === 0) return null;
+
+    return {
+      home: {
+        teamName: data.homeTeam.name,
+        teamId: data.homeTeam.id,
+        teamLogo: data.homeTeam.crest,
+        formation: data.homeTeam.formation || '?',
+        starters: homeLineup.map(p => ({
+          id: `p_${p.id}`, playerId: p.id, name: p.name,
+          number: p.shirtNumber, pos: mapPosition(p.position),
+        })),
+      },
+      away: {
+        teamName: data.awayTeam.name,
+        teamId: data.awayTeam.id,
+        teamLogo: data.awayTeam.crest,
+        formation: data.awayTeam.formation || '?',
+        starters: awayLineup.map(p => ({
+          id: `p_${p.id}`, playerId: p.id, name: p.name,
+          number: p.shirtNumber, pos: mapPosition(p.position),
+        })),
+      },
+    };
+  } catch (error) {
+    console.error(`Failed to fetch lineups for match ${matchId}:`, error);
+    return null;
+  }
 }
 
-// Get match events (goals, cards, subs)
-export async function getMatchEvents(fixtureId) {
-  const events = await apiFetch('fixtures/events', { fixture: fixtureId });
-  return events;
-}
-
-// Format a fixture from API-Football into our app format
-function formatMatch(fixture) {
-  const f = fixture.fixture;
-  const teams = fixture.teams;
-  const goals = fixture.goals;
-  const league = fixture.league;
-
+// Format a match from football-data.org into our app format
+function formatMatch(match) {
   let status = 'upcoming';
   let minute = '';
-  
-  // API-Football status codes
-  const liveStatuses = ['1H', '2H', 'HT', 'ET', 'P', 'BT', 'LIVE'];
-  const finishedStatuses = ['FT', 'AET', 'PEN'];
-  
-  if (liveStatuses.includes(f.status?.short)) {
+
+  const liveStatuses = ['IN_PLAY', 'PAUSED', 'HALFTIME', 'EXTRA_TIME', 'PENALTY_SHOOTOUT'];
+  const finishedStatuses = ['FINISHED', 'AWARDED', 'CANCELLED'];
+
+  if (liveStatuses.includes(match.status)) {
     status = 'live';
-    minute = f.status?.elapsed ? `${f.status.elapsed}'` : 'En cours';
-  } else if (finishedStatuses.includes(f.status?.short)) {
+    minute = match.minute ? `${match.minute}'` : match.status === 'HALFTIME' ? 'MT' : 'En cours';
+  } else if (finishedStatuses.includes(match.status)) {
     status = 'finished';
   }
 
-  const matchDate = new Date(f.date);
+  const matchDate = new Date(match.utcDate);
   const dateStr = matchDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
   const timeStr = matchDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 
-  const homeScore = goals.home !== null ? goals.home : '-';
-  const awayScore = goals.away !== null ? goals.away : '-';
+  const homeScore = match.score?.fullTime?.home;
+  const awayScore = match.score?.fullTime?.away;
+  const scoreDisplay = homeScore !== null && homeScore !== undefined
+    ? `${homeScore} - ${awayScore}` : '- - -';
 
   return {
-    id: f.id.toString(),
-    fixtureId: f.id,
-    home: teams.home.name,
-    homeId: teams.home.id,
-    homeLogo: teams.home.logo,
-    away: teams.away.name,
-    awayId: teams.away.id,
-    awayLogo: teams.away.logo,
-    score: `${homeScore} - ${awayScore}`,
+    id: match.id.toString(),
+    fixtureId: match.id,
+    home: match.homeTeam?.shortName || match.homeTeam?.name || '?',
+    homeId: match.homeTeam?.id,
+    homeLogo: match.homeTeam?.crest || null,
+    away: match.awayTeam?.shortName || match.awayTeam?.name || '?',
+    awayId: match.awayTeam?.id,
+    awayLogo: match.awayTeam?.crest || null,
+    score: scoreDisplay,
     date: dateStr,
     time: timeStr,
     status,
     minute,
-    leagueId: league.id,
-    leagueName: league.name,
-    leagueLogo: league.logo,
-    round: league.round,
+    matchday: match.matchday,
+    round: match.stage || `Journée ${match.matchday}`,
   };
 }
 
-// Format lineup data
-function formatLineup(teamLineup) {
-  const formation = teamLineup.formation;
-  const starters = (teamLineup.startXI || []).map((p, i) => ({
-    id: `p_${p.player.id}`,
-    playerId: p.player.id,
-    name: p.player.name,
-    number: p.player.number,
-    pos: mapPosition(p.player.pos),
-    photo: null, // Could add player photos with another API call
-  }));
-
-  const subs = (teamLineup.substitutes || []).map((p, i) => ({
-    id: `sub_${p.player.id}`,
-    playerId: p.player.id,
-    name: p.player.name,
-    number: p.player.number,
-    pos: mapPosition(p.player.pos),
-  }));
-
-  return {
-    teamName: teamLineup.team.name,
-    teamId: teamLineup.team.id,
-    teamLogo: teamLineup.team.logo,
-    formation,
-    starters,
-    subs,
-  };
-}
-
-// Map API-Football positions to our format
 function mapPosition(pos) {
-  const map = { G: 'GK', D: 'DEF', M: 'MIL', F: 'ATT' };
-  return map[pos] || pos || '?';
+  if (!pos) return '?';
+  const map = {
+    'Goalkeeper': 'GK',
+    'Defence': 'DEF', 'Left-Back': 'DEF', 'Right-Back': 'DEF', 'Centre-Back': 'DEF',
+    'Midfield': 'MIL', 'Central Midfield': 'MIL', 'Attacking Midfield': 'MIL',
+    'Defensive Midfield': 'MIL', 'Left Midfield': 'MIL', 'Right Midfield': 'MIL',
+    'Offence': 'ATT', 'Centre-Forward': 'ATT', 'Left Winger': 'ATT', 'Right Winger': 'ATT',
+  };
+  return map[pos] || pos.substring(0, 3).toUpperCase();
 }

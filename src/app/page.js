@@ -24,6 +24,7 @@ export default function Home() {
   const [userReactions, setUserReactions] = useState({});
   const [commentSort, setCommentSort] = useState('hot');
   const [realMatches, setRealMatches] = useState({});
+  const [fetchedLeagues, setFetchedLeagues] = useState(new Set());
   const [realLineups, setRealLineups] = useState(null);
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [loadingLineups, setLoadingLineups] = useState(false);
@@ -33,14 +34,13 @@ export default function Home() {
   // Fetch matches only when a league is selected (saves API quota)
   useEffect(() => {
     if (!selectedLeague || !useRealData) return;
-    // Skip if already fetched
-    if (realMatches[selectedLeague.id]) return;
+    if (fetchedLeagues.has(selectedLeague.id)) return;
     let cancelled = false;
     setLoadingMatches(true);
     setApiDebug(null);
     async function fetchLeagueMatches() {
       try {
-        const matches = await getMatchesByLeague(selectedLeague.apiId);
+        const matches = await getMatchesByLeague(selectedLeague.code);
         if (!cancelled) {
           setRealMatches(prev => ({ ...prev, [selectedLeague.id]: matches }));
           setApiDebug({ success: true, count: matches.length, league: selectedLeague.name });
@@ -51,7 +51,10 @@ export default function Home() {
           setApiDebug({ success: false, error: e.message, league: selectedLeague.name });
         }
       } finally {
-        if (!cancelled) setLoadingMatches(false);
+        if (!cancelled) {
+          setLoadingMatches(false);
+          setFetchedLeagues(prev => new Set([...prev, selectedLeague.id]));
+        }
       }
     }
     fetchLeagueMatches();
@@ -402,8 +405,9 @@ export default function Home() {
               border: `1px solid ${apiDebug.success ? 'rgba(0,230,118,0.3)' : 'rgba(231,76,60,0.3)'}`,
               fontSize: 11, color: t.textDim, fontFamily: 'monospace',
             }}>
-              <div>🔍 Debug API: {apiDebug.league}</div>
-              <div>{apiDebug.success ? `✅ ${apiDebug.count} matchs trouvés` : `❌ Erreur: ${apiDebug.error}`}</div>
+              <div>🔍 Debug: {apiDebug.league} (Code: {selectedLeague?.code})</div>
+              <div>{apiDebug.success ? `✅ ${apiDebug.count} matchs trouvés` : `❌ ${apiDebug.error}`}</div>
+              <div>📡 Source: football-data.org | Fenêtre: ±14 jours</div>
             </div>
           )}
           {matches.map((match, i) => (

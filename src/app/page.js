@@ -4,6 +4,14 @@ import { themes } from '../data/themes';
 import { LEAGUES as MOCK_LEAGUES, MOCK_MATCHES, MOCK_COMMENTS, REACTION_EMOJIS, LEADERBOARD, BADGES_INFO, BEST_XI, generatePlayers } from '../data/mockData';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar, PitchView } from '../components/UI';
+import { AuthModal, UserBadge } from '../components/Auth';
+import { auth } from '../data/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  savePlayerRating, saveMatchRating, getUserRatings,
+  getPlayerAverages, getMatchAverage, getUserProfile,
+  addUserPoints, calculatePoints,
+} from '../data/firebaseRatings';
 
 export default function Home() {
   const [isDark, setIsDark] = useState(true);
@@ -23,6 +31,30 @@ export default function Home() {
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(null);
   const [userReactions, setUserReactions] = useState({});
   const [commentSort, setCommentSort] = useState('hot');
+
+  // ── AUTH STATE ──
+  const [user, setUser] = useState(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [userPoints, setUserPoints] = useState(0);
+
+  // ── FIREBASE RATING STATE ──
+  const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
+  const [communityMatchAvg, setCommunityMatchAvg] = useState({ average: 0, count: 0 });
+  const [pointsEarned, setPointsEarned] = useState(0);
+
+  // Listen for auth changes
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        const profile = await getUserProfile(u.uid);
+        setUserPoints(profile.points || 0);
+      } else {
+        setUserPoints(0);
+      }
+    });
+    return () => unsub();
+  }, []);
   const [realMatches, setRealMatches] = useState({});
   const [fetchedLeagues, setFetchedLeagues] = useState(new Set());
   const [realLineups, setRealLineups] = useState(null);
@@ -96,6 +128,20 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [selectedMatch, useRealData]);
 
+  // Load user's existing ratings and community averages when entering a match
+  useEffect(() => {
+    if (!selectedMatch) return;
+    // Load community averages
+    getPlayerAverages(selectedMatch.id).then(setCommunityPlayerAvgs).catch(() => {});
+    getMatchAverage(selectedMatch.id).then(setCommunityMatchAvg).catch(() => {});
+    // Load user's existing ratings
+    if (user) {
+      getUserRatings(user.uid, selectedMatch.id).then(ratings => {
+        if (Object.keys(ratings).length > 0) setPlayerRatings(ratings);
+      }).catch(() => {});
+    }
+  }, [selectedMatch, user]);
+
   // Get players for the current match — ONLY real lineups, no fake data
   function getPlayers() {
     if (realLineups) {
@@ -119,20 +165,16 @@ export default function Home() {
     return false;
   }
 
-  const [communityRatings] = useState(() => {
-    const cr = {};
-    Object.values(MOCK_MATCHES).flat().forEach((m) => {
-      cr[m.id] = { matchAvg: (Math.random() * 3 + 5).toFixed(1), votes: Math.floor(Math.random() * 2000 + 200) };
-    });
-    return cr;
-  });
-
-  const ratePlayer = (pid, r) => setPlayerRatings(prev => ({ ...prev, [pid]: r }));
+  const ratePlayer = (pid, r) => {
+    if (!user) { setShowAuthModal(true); return; }
+    setPlayerRatings(prev => ({ ...prev, [pid]: r }));
+  };
 
   const submitComment = () => {
+    if (!user) { setShowAuthModal(true); return; }
     if (!newComment.trim()) return;
     const newId = 'c_' + Date.now();
-    setComments(prev => [{ id: newId, user: 'Toi', text: newComment, time: "à l'instant", reactions: {} }, ...prev]);
+    setComments(prev => [{ id: newId, user: user.displayName || 'Siffleur', text: newComment, time: "à l'instant", reactions: {} }, ...prev]);
     setNewComment('');
   };
 
@@ -161,13 +203,56 @@ export default function Home() {
     return 0;
   });
 
-  const submitAllRatings = () => {
+  const submitAllRatings = async () => {
+    if (!user) { setShowAuthModal(true); return; }
+    if (!selectedMatch) return;
+
+    try {
+      let totalPoints = 0;
+
+      // Save player ratings to Firebase
+      for (const [playerId, rating] of Object.entries(playerRatings)) {
+        await savePlayerRating(user.uid, selectedMatch.id, playerId, rating);
+      }
+
+      // Save match rating
+      if (matchRating > 0) {
+        await saveMatchRating(user.uid, selectedMatch.id, matchRating);
+      }
+
+      // Reload averages to calculate points
+      const newPlayerAvgs = await getPlayerAverages(selectedMatch.id);
+      const newMatchAvg = await getMatchAverage(selectedMatch.id);
+      setCommunityPlayerAvgs(newPlayerAvgs);
+      setCommunityMatchAvg(newMatchAvg);
+
+      // Calculate points based on proximity to average
+      for (const [playerId, rating] of Object.entries(playerRatings)) {
+        const avg = newPlayerAvgs[playerId]?.average || 0;
+        totalPoints += calculatePoints(rating, avg);
+      }
+      if (matchRating > 0) {
+        totalPoints += calculatePoints(matchRating, newMatchAvg.average);
+      }
+
+      // Save points
+      await addUserPoints(user.uid, totalPoints, selectedMatch.id);
+      setPointsEarned(totalPoints);
+      setUserPoints(prev => prev + totalPoints);
+
+      // Refresh user profile
+      const profile = await getUserProfile(user.uid);
+      setUserPoints(profile.points || 0);
+    } catch (e) {
+      console.error('Error saving ratings:', e);
+    }
+
     setShowConfirmation(true);
-    setTimeout(() => setShowConfirmation(false), 2500);
+    setTimeout(() => setShowConfirmation(false), 3000);
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setLineupDebug(null); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setLineupDebug(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard' || screen === 'bestxi') { setScreen('home'); }
   };
@@ -217,20 +302,17 @@ export default function Home() {
             Note les joueurs, donne ton verdict
           </span>
         </div>
-        <div style={{
-          margin: '0 24px 20px', padding: '16px 20px',
-          background: t.accentDim, borderRadius: 16, border: `1px solid ${t.accent}33`,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}>
-          <div>
-            <div style={{ fontSize: 12, color: t.textDim, marginBottom: 4 }}>Ton classement</div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 28, fontWeight: 900, color: t.accent }}>#8</span>
-              <span style={{ fontSize: 13, color: t.textDim }}>2 450 pts</span>
-            </div>
-          </div>
-          <span style={{ fontSize: 22 }}>🌱</span>
+        {/* User badge or login prompt */}
+        <div style={{ margin: '0 24px 20px' }}>
+          <UserBadge
+            user={user}
+            onLogin={() => setShowAuthModal(true)}
+            onLogout={() => signOut(auth)}
+            t={t}
+            userPoints={userPoints}
+          />
         </div>
+        <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
         <div style={{ padding: '0 24px 100px' }}>
           <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 14 }}>Compétitions</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -467,16 +549,6 @@ export default function Home() {
                   <div style={{ fontSize: 16, fontWeight: 800 }}>{match.away}</div>
                 </div>
               </div>
-              {communityRatings[match.id] && (
-                <div style={{
-                  display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10,
-                  marginTop: 14, paddingTop: 10, borderTop: `1px solid ${t.border}`,
-                }}>
-                  <span style={{ fontSize: 11, color: t.textDim }}>Note communauté</span>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: t.accent }}>{communityRatings[match.id].matchAvg}</span>
-                  <span style={{ fontSize: 10, color: t.textDim }}>/ 10 · {communityRatings[match.id].votes} votes</span>
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -506,10 +578,12 @@ export default function Home() {
               <div style={{ fontSize: 64, marginBottom: 16 }}>✅</div>
               <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 8 }}>Coup de sifflet final !</div>
               <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 15 }}>Ton verdict a été enregistré</div>
-              <div style={{ color: '#00e676', fontSize: 13, marginTop: 8 }}>+{ratedCount * 10 + (matchRating > 0 ? 25 : 0)} pts gagnés 🎉</div>
+              <div style={{ color: '#00e676', fontSize: 16, fontWeight: 800, marginTop: 12 }}>+{pointsEarned} pts gagnés 🎉</div>
+              {pointsEarned >= 40 && <div style={{ color: '#f1c40f', fontSize: 12, marginTop: 4 }}>👁️ Œil de Lynx ! Tes notes sont proches de la moyenne</div>}
             </div>
           </div>
         )}
+        <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
         <div style={{ padding: '14px 24px', borderBottom: `1px solid ${t.border}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -634,7 +708,14 @@ export default function Home() {
                       {player.number && <span style={{ fontSize: 10, fontWeight: 700, color: t.textDim }}>#{player.number}</span>}
                       <span style={{ fontSize: 14, fontWeight: 700 }}>{player.name}</span>
                     </div>
-                    {playerRatings[player.id] && <span style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{playerRatings[player.id]}</span>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {playerRatings[player.id] && <span style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{playerRatings[player.id]}</span>}
+                      {communityPlayerAvgs[player.id] && (
+                        <span style={{ fontSize: 11, color: t.textDim }}>
+                          moy. {communityPlayerAvgs[player.id].average} ({communityPlayerAvgs[player.id].count})
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {canRate() ? (
                     <StarRating value={playerRatings[player.id] || 0} onChange={r => ratePlayer(player.id, r)} size={22} />
@@ -674,11 +755,11 @@ export default function Home() {
                 <div style={{ fontSize: 12, fontWeight: 700, color: t.textDim, textTransform: 'uppercase', letterSpacing: 2, marginBottom: 14 }}>Moyenne communauté</div>
                 <div style={{ display: 'flex', justifyContent: 'space-around' }}>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 32, fontWeight: 900, color: t.accent }}>{communityRatings[selectedMatch.id]?.matchAvg || '—'}</div>
+                    <div style={{ fontSize: 32, fontWeight: 900, color: t.accent }}>{communityMatchAvg.average > 0 ? communityMatchAvg.average : '—'}</div>
                     <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Note</div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 32, fontWeight: 900 }}>{communityRatings[selectedMatch.id]?.votes || 0}</div>
+                    <div style={{ fontSize: 32, fontWeight: 900 }}>{communityMatchAvg.count || 0}</div>
                     <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>Votes</div>
                   </div>
                 </div>
@@ -688,7 +769,9 @@ export default function Home() {
                 <div style={{ background: 'rgba(128,128,128,0.12)', borderRadius: 10, height: 8, overflow: 'hidden' }}>
                   <div style={{ width: `${(ratedCount / totalPlayers) * 100}%`, height: '100%', borderRadius: 10, background: `linear-gradient(90deg, ${t.accent}, #00b0ff)`, transition: 'width 0.4s' }} />
                 </div>
-                <div style={{ fontSize: 11, color: t.accent, marginTop: 6 }}>+{ratedCount * 10 + (matchRating > 0 ? 25 : 0)} pts à valider</div>
+                <div style={{ fontSize: 11, color: t.accent, marginTop: 6 }}>
+                  {ratedCount > 0 ? 'Plus tes notes sont proches de la moyenne, plus tu gagnes de points !' : 'Note des joueurs pour gagner des points'}
+                </div>
               </div>
             </div>
           )}
@@ -813,7 +896,7 @@ export default function Home() {
               color: '#0a0e17', fontSize: 15, fontWeight: 800, cursor: 'pointer',
               boxShadow: `0 8px 32px ${t.accent}44`, letterSpacing: 0.5,
             }}>
-              🏁 Valider ({ratedCount} joueur{ratedCount > 1 ? 's' : ''}{matchRating > 0 ? ' + match' : ''}) · +{ratedCount * 10 + (matchRating > 0 ? 25 : 0)} pts
+              🏁 Valider mon verdict ({ratedCount} joueur{ratedCount > 1 ? 's' : ''}{matchRating > 0 ? ' + match' : ''})
             </button>
           </div>
         )}

@@ -1,5 +1,5 @@
 // API Route - This runs on the SERVER, so the API key stays secret
-// Users call /api/football?endpoint=fixtures&league=61&season=2024
+// Users call /api/football?endpoint=fixtures&league=61
 // and we forward the request to API-Football with our key
 
 export async function GET(request) {
@@ -37,14 +37,25 @@ export async function GET(request) {
 
     const data = await response.json();
 
+    // Log quota info for debugging
+    const remaining = response.headers.get('x-ratelimit-requests-remaining');
+    if (remaining) {
+      console.log(`API-Football quota remaining: ${remaining} | Endpoint: ${endpoint} | Params: ${apiParams.toString()}`);
+    }
+
+    // Log if API returned errors
+    if (data.errors && Object.keys(data.errors).length > 0) {
+      console.error('API-Football errors:', data.errors, '| URL:', apiUrl);
+    }
+
     // Add cache headers so browser also caches
     return Response.json(data, {
       headers: {
-        'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=300',
+        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
       },
     });
   } catch (error) {
-    console.error('API-Football error:', error);
+    console.error('API-Football fetch error:', error, '| URL:', apiUrl);
     return Response.json({ error: 'Failed to fetch data' }, { status: 500 });
   }
 }

@@ -29,25 +29,32 @@ export function getCurrentSeason(leagueId) {
 // Fetch from our API route (never directly from API-Football)
 async function apiFetch(endpoint, params = {}) {
   const searchParams = new URLSearchParams({ endpoint, ...params });
-  const res = await fetch(`/api/football?${searchParams.toString()}`);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  const url = `/api/football?${searchParams.toString()}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`API HTTP error: ${res.status}`);
   const data = await res.json();
+  
+  // Check for API-Football errors in response
+  if (data.errors && Object.keys(data.errors).length > 0) {
+    console.error('API-Football errors:', data.errors);
+    throw new Error(`API error: ${JSON.stringify(data.errors)}`);
+  }
+  
+  console.log(`API fetch: ${endpoint} | params: ${searchParams.toString()} | results: ${data.results || 0}`);
   return data.response || [];
 }
 
 // Get recent and upcoming matches for a specific league
-// Uses 'last' and 'next' params so there's ALWAYS content, even during breaks
+// Uses 'last' and 'next' params WITHOUT season (they conflict on free plan)
 export async function getMatchesByLeague(leagueApiId) {
-  const season = getCurrentSeason(leagueApiId);
-  
   try {
-    // Fetch last 5 played matches + next 5 upcoming (2 API calls per league)
+    // Fetch last 5 played + next 5 upcoming (no season param needed)
     const [lastMatches, nextMatches] = await Promise.all([
-      apiFetch('fixtures', { league: leagueApiId, season, last: 5, timezone: 'Europe/Paris' }),
-      apiFetch('fixtures', { league: leagueApiId, season, next: 5, timezone: 'Europe/Paris' }),
+      apiFetch('fixtures', { league: leagueApiId, last: 5, timezone: 'Europe/Paris' }),
+      apiFetch('fixtures', { league: leagueApiId, next: 5, timezone: 'Europe/Paris' }),
     ]);
     
-    // Combine, deduplicate by fixture id, and sort by date
+    // Combine, deduplicate by fixture id
     const allFixtures = [...lastMatches, ...nextMatches];
     const seen = new Set();
     const unique = allFixtures.filter(f => {
@@ -57,12 +64,12 @@ export async function getMatchesByLeague(leagueApiId) {
       return true;
     });
     
-    // Sort: live first, then upcoming, then finished (most recent first)
+    // Sort: live first, then upcoming, then finished
     const formatted = unique.map(f => formatMatch(f));
     formatted.sort((a, b) => {
       const order = { live: 0, upcoming: 1, finished: 2 };
       if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
-      return 0; // keep API order within same status
+      return 0;
     });
     
     return formatted;

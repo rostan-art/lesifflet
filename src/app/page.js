@@ -28,6 +28,7 @@ export default function Home() {
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [loadingLineups, setLoadingLineups] = useState(false);
   const [useRealData, setUseRealData] = useState(true);
+  const [apiDebug, setApiDebug] = useState(null);
 
   // Fetch matches only when a league is selected (saves API quota)
   useEffect(() => {
@@ -36,14 +37,19 @@ export default function Home() {
     if (realMatches[selectedLeague.id]) return;
     let cancelled = false;
     setLoadingMatches(true);
+    setApiDebug(null);
     async function fetchLeagueMatches() {
       try {
         const matches = await getMatchesByLeague(selectedLeague.apiId);
         if (!cancelled) {
           setRealMatches(prev => ({ ...prev, [selectedLeague.id]: matches }));
+          setApiDebug({ success: true, count: matches.length, league: selectedLeague.name });
         }
       } catch (e) {
         console.warn(`Failed to fetch ${selectedLeague.name}:`, e);
+        if (!cancelled) {
+          setApiDebug({ success: false, error: e.message, league: selectedLeague.name });
+        }
       } finally {
         if (!cancelled) setLoadingMatches(false);
       }
@@ -386,6 +392,18 @@ export default function Home() {
               <div style={{ fontSize: 13, color: t.textDim, lineHeight: 1.5 }}>
                 Trêve internationale ou intersaison. Les matchs réapparaîtront automatiquement à la reprise du championnat.
               </div>
+            </div>
+          )}
+          {/* Debug info — à retirer plus tard */}
+          {apiDebug && (
+            <div style={{
+              padding: '12px 16px', marginTop: 10, borderRadius: 12,
+              background: apiDebug.success ? 'rgba(0,230,118,0.1)' : 'rgba(231,76,60,0.1)',
+              border: `1px solid ${apiDebug.success ? 'rgba(0,230,118,0.3)' : 'rgba(231,76,60,0.3)'}`,
+              fontSize: 11, color: t.textDim, fontFamily: 'monospace',
+            }}>
+              <div>🔍 Debug API: {apiDebug.league}</div>
+              <div>{apiDebug.success ? `✅ ${apiDebug.count} matchs trouvés` : `❌ Erreur: ${apiDebug.error}`}</div>
             </div>
           )}
           {matches.map((match, i) => (

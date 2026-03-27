@@ -81,15 +81,27 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [selectedMatch, useRealData]);
 
-  // Get players for the current match (real or mock)
+  // Get players for the current match — ONLY real lineups, no fake data
   function getPlayers() {
-    if (useRealData && realLineups) {
+    if (realLineups) {
       return {
         home: realLineups.home?.starters || [],
         away: realLineups.away?.starters || [],
       };
     }
-    return generatePlayers(selectedMatch?.id);
+    return { home: [], away: [] };
+  }
+
+  // Can the user rate? Only after halftime (45') or if match is finished
+  function canRate() {
+    if (!selectedMatch) return false;
+    if (selectedMatch.status === 'finished') return true;
+    if (selectedMatch.status === 'live') {
+      // Extract minute number from "67'" format
+      const min = parseInt(selectedMatch.minute);
+      return !isNaN(min) && min >= 45;
+    }
+    return false;
   }
 
   const [communityRatings] = useState(() => {
@@ -397,19 +409,6 @@ export default function Home() {
               </div>
             </div>
           )}
-          {/* Debug info — à retirer plus tard */}
-          {apiDebug && (
-            <div style={{
-              padding: '12px 16px', marginTop: 10, borderRadius: 12,
-              background: apiDebug.success ? 'rgba(0,230,118,0.1)' : 'rgba(231,76,60,0.1)',
-              border: `1px solid ${apiDebug.success ? 'rgba(0,230,118,0.3)' : 'rgba(231,76,60,0.3)'}`,
-              fontSize: 11, color: t.textDim, fontFamily: 'monospace',
-            }}>
-              <div>🔍 Debug: {apiDebug.league} (Code: {selectedLeague?.code})</div>
-              <div>{apiDebug.success ? `✅ ${apiDebug.count} matchs trouvés` : `❌ ${apiDebug.error}`}</div>
-              <div>📡 Source: football-data.org | Fenêtre: ±14 jours</div>
-            </div>
-          )}
           {matches.map((match, i) => (
             <div key={match.id}
               onClick={() => { setSelectedMatch(match); setScreen('match'); setSelectedTeamTab('home'); setBottomNav('home'); }}
@@ -558,12 +557,36 @@ export default function Home() {
                   textAlign: 'center', padding: '40px 20px',
                   background: t.card, borderRadius: 16, border: `1px solid ${t.border}`,
                 }}>
-                  <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
-                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Compositions pas encore disponibles</div>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>
+                    {selectedMatch.status === 'upcoming' ? '📋' : '⏳'}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+                    {selectedMatch.status === 'upcoming'
+                      ? 'Compositions pas encore disponibles'
+                      : 'Compositions en cours de chargement'}
+                  </div>
                   <div style={{ fontSize: 12, color: t.textDim, lineHeight: 1.5 }}>
                     {selectedMatch.status === 'upcoming'
-                      ? 'Les compositions seront disponibles environ 1h avant le coup d\'envoi.'
-                      : 'Les données de ce match ne sont pas disponibles pour le moment.'}
+                      ? 'Les compositions officielles sont publiées environ 1h avant le coup d\'envoi. Reviens un peu avant le match !'
+                      : 'Les données arrivent, réessaie dans quelques instants.'}
+                  </div>
+                </div>
+              )}
+              {/* Rating lock banner */}
+              {!loadingLineups && currentPlayers.length > 0 && !canRate() && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '12px 16px', marginBottom: 14, borderRadius: 12,
+                  background: 'rgba(241,196,15,0.1)', border: '1px solid rgba(241,196,15,0.25)',
+                }}>
+                  <span style={{ fontSize: 20 }}>🔒</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f1c40f' }}>Notation verrouillée</div>
+                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>
+                      {selectedMatch.status === 'upcoming'
+                        ? 'Tu pourras noter les joueurs à partir de la mi-temps.'
+                        : 'Les notes ouvrent à la mi-temps (45\') pour garantir des verdicts crédibles.'}
+                    </div>
                   </div>
                 </div>
               )}
@@ -578,11 +601,16 @@ export default function Home() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'rgba(128,128,128,0.12)', color: t.textDim, letterSpacing: 1 }}>{player.pos}</span>
+                      {player.number && <span style={{ fontSize: 10, fontWeight: 700, color: t.textDim }}>#{player.number}</span>}
                       <span style={{ fontSize: 14, fontWeight: 700 }}>{player.name}</span>
                     </div>
                     {playerRatings[player.id] && <span style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{playerRatings[player.id]}</span>}
                   </div>
-                  <StarRating value={playerRatings[player.id] || 0} onChange={r => ratePlayer(player.id, r)} size={22} />
+                  {canRate() ? (
+                    <StarRating value={playerRatings[player.id] || 0} onChange={r => ratePlayer(player.id, r)} size={22} />
+                  ) : (
+                    <div style={{ fontSize: 11, color: t.textDim, fontStyle: 'italic' }}>🔒 Notation à partir de la mi-temps</div>
+                  )}
                 </div>
               ))}
             </>
@@ -593,10 +621,24 @@ export default function Home() {
             <div style={{ animation: 'slideUp 0.3s ease' }}>
               <div style={{ background: t.card, borderRadius: 18, padding: 22, border: `1px solid ${t.border}`, textAlign: 'center', boxShadow: `0 2px 10px ${t.shadowColor}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: t.textDim, textTransform: 'uppercase', letterSpacing: 2, marginBottom: 18 }}>Note ce match</div>
-                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
-                  <StarRating value={matchRating} onChange={setMatchRating} size={30} />
-                </div>
-                {matchRating > 0 && <div style={{ fontSize: 44, fontWeight: 900, color: t.accent }}>{matchRating}<span style={{ fontSize: 18, color: t.textDim }}>/10</span></div>}
+                {canRate() ? (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+                      <StarRating value={matchRating} onChange={setMatchRating} size={30} />
+                    </div>
+                    {matchRating > 0 && <div style={{ fontSize: 44, fontWeight: 900, color: t.accent }}>{matchRating}<span style={{ fontSize: 18, color: t.textDim }}>/10</span></div>}
+                  </>
+                ) : (
+                  <div style={{ padding: '16px 0' }}>
+                    <div style={{ fontSize: 32, marginBottom: 10 }}>🔒</div>
+                    <div style={{ fontSize: 13, color: '#f1c40f', fontWeight: 700, marginBottom: 4 }}>Notation verrouillée</div>
+                    <div style={{ fontSize: 12, color: t.textDim }}>
+                      {selectedMatch.status === 'upcoming'
+                        ? 'Tu pourras noter après la mi-temps du match.'
+                        : 'La notation ouvre à la 45e minute.'}
+                    </div>
+                  </div>
+                )}
               </div>
               <div style={{ background: t.card, borderRadius: 18, padding: 22, marginTop: 10, border: `1px solid ${t.border}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: t.textDim, textTransform: 'uppercase', letterSpacing: 2, marginBottom: 14 }}>Moyenne communauté</div>

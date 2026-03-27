@@ -51,40 +51,49 @@ export async function getMatchesByLeague(leagueCode) {
   }
 }
 
-// Get lineups for a specific match
-export async function getMatchLineups(matchId) {
+// Get squads for both teams in a match
+// Free plan doesn't include lineups, so we fetch full team squads instead
+export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
   try {
-    const data = await apiFetch(`matches/${matchId}`);
-    if (!data || !data.homeTeam || !data.awayTeam) return null;
+    // Fetch both team squads in parallel
+    const [homeData, awayData] = await Promise.all([
+      homeTeamId ? apiFetch(`teams/${homeTeamId}`) : null,
+      awayTeamId ? apiFetch(`teams/${awayTeamId}`) : null,
+    ]);
 
-    const homeLineup = data.homeTeam.lineup || [];
-    const awayLineup = data.awayTeam.lineup || [];
-    if (homeLineup.length === 0 && awayLineup.length === 0) return null;
+    if (!homeData && !awayData) return null;
+
+    const formatSquad = (teamData) => {
+      if (!teamData || !teamData.squad) return null;
+      
+      // Sort: GK first, then DEF, MIL, ATT
+      const posOrder = { 'GK': 0, 'DEF': 1, 'MIL': 2, 'ATT': 3 };
+      const players = teamData.squad
+        .filter(p => p.name) // Filter out empty entries
+        .map(p => ({
+          id: `p_${p.id}`,
+          playerId: p.id,
+          name: p.name,
+          number: p.shirtNumber || null,
+          pos: mapPosition(p.position),
+        }))
+        .sort((a, b) => (posOrder[a.pos] || 9) - (posOrder[b.pos] || 9));
+
+      return {
+        teamName: teamData.shortName || teamData.name,
+        teamId: teamData.id,
+        teamLogo: teamData.crest,
+        formation: null,
+        starters: players,
+      };
+    };
 
     return {
-      home: {
-        teamName: data.homeTeam.name,
-        teamId: data.homeTeam.id,
-        teamLogo: data.homeTeam.crest,
-        formation: data.homeTeam.formation || '?',
-        starters: homeLineup.map(p => ({
-          id: `p_${p.id}`, playerId: p.id, name: p.name,
-          number: p.shirtNumber, pos: mapPosition(p.position),
-        })),
-      },
-      away: {
-        teamName: data.awayTeam.name,
-        teamId: data.awayTeam.id,
-        teamLogo: data.awayTeam.crest,
-        formation: data.awayTeam.formation || '?',
-        starters: awayLineup.map(p => ({
-          id: `p_${p.id}`, playerId: p.id, name: p.name,
-          number: p.shirtNumber, pos: mapPosition(p.position),
-        })),
-      },
+      home: formatSquad(homeData),
+      away: formatSquad(awayData),
     };
   } catch (error) {
-    console.error(`Failed to fetch lineups for match ${matchId}:`, error);
+    console.error(`Failed to fetch squads for match ${matchId}:`, error);
     return null;
   }
 }

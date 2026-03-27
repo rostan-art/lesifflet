@@ -63,38 +63,27 @@ export default function Home() {
 
   const [lineupDebug, setLineupDebug] = useState(null);
 
-  // Fetch lineups when a match is selected
+  // Fetch team squads when a match is selected
   useEffect(() => {
     if (!selectedMatch || !useRealData || !selectedMatch.fixtureId) return;
     let cancelled = false;
     setLoadingLineups(true);
     setLineupDebug(null);
-    async function fetchLineups() {
+    async function fetchSquads() {
       try {
-        // Fetch raw match data for debug
-        const rawRes = await fetch(`/api/football?path=matches/${selectedMatch.fixtureId}`);
-        const rawData = await rawRes.json();
-        
+        const lineups = await getMatchLineups(
+          selectedMatch.fixtureId,
+          selectedMatch.homeId,
+          selectedMatch.awayId
+        );
         if (!cancelled) {
-          // Check what lineup data is available
-          const homeLineup = rawData?.homeTeam?.lineup || [];
-          const awayLineup = rawData?.awayTeam?.lineup || [];
-          setLineupDebug({
-            hasHomeLineup: homeLineup.length > 0,
-            hasAwayLineup: awayLineup.length > 0,
-            homeCount: homeLineup.length,
-            awayCount: awayLineup.length,
-            homeTeamKeys: rawData?.homeTeam ? Object.keys(rawData.homeTeam) : [],
-            status: rawData?.status,
-            errorCode: rawData?.errorCode || null,
-            errorMsg: rawData?.message || null,
-          });
+          setRealLineups(lineups);
+          const homeCount = lineups?.home?.starters?.length || 0;
+          const awayCount = lineups?.away?.starters?.length || 0;
+          setLineupDebug({ success: true, homeCount, awayCount });
         }
-
-        const lineups = await getMatchLineups(selectedMatch.fixtureId);
-        if (!cancelled) setRealLineups(lineups);
       } catch (e) {
-        console.warn('Failed to fetch lineups:', e);
+        console.warn('Failed to fetch squads:', e);
         if (!cancelled) {
           setRealLineups(null);
           setLineupDebug({ error: e.message });
@@ -103,7 +92,7 @@ export default function Home() {
         if (!cancelled) setLoadingLineups(false);
       }
     }
-    fetchLineups();
+    fetchSquads();
     return () => { cancelled = true; };
   }, [selectedMatch, useRealData]);
 
@@ -600,19 +589,14 @@ export default function Home() {
                   {lineupDebug && (
                     <div style={{
                       marginTop: 16, padding: '10px 14px', borderRadius: 10,
-                      background: 'rgba(231,76,60,0.08)', border: '1px solid rgba(231,76,60,0.2)',
+                      background: lineupDebug.success ? 'rgba(0,230,118,0.08)' : 'rgba(231,76,60,0.08)',
+                      border: `1px solid ${lineupDebug.success ? 'rgba(0,230,118,0.2)' : 'rgba(231,76,60,0.2)'}`,
                       fontSize: 10, color: t.textDim, fontFamily: 'monospace', textAlign: 'left',
                     }}>
-                      <div>🔍 Lineup Debug (match #{selectedMatch.fixtureId}):</div>
+                      <div>🔍 Squad Debug (match #{selectedMatch.fixtureId}):</div>
                       {lineupDebug.error && <div>❌ Error: {lineupDebug.error}</div>}
-                      {lineupDebug.errorCode && <div>❌ API: {lineupDebug.errorCode} - {lineupDebug.errorMsg}</div>}
-                      {!lineupDebug.error && !lineupDebug.errorCode && (
-                        <>
-                          <div>Status: {lineupDebug.status}</div>
-                          <div>Home lineup: {lineupDebug.homeCount} joueurs</div>
-                          <div>Away lineup: {lineupDebug.awayCount} joueurs</div>
-                          <div>HomeTeam keys: {lineupDebug.homeTeamKeys?.join(', ')}</div>
-                        </>
+                      {lineupDebug.success && (
+                        <div>✅ Home: {lineupDebug.homeCount} joueurs | Away: {lineupDebug.awayCount} joueurs</div>
                       )}
                     </div>
                   )}

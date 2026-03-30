@@ -138,7 +138,7 @@ export function calculatePoints(userRating, communityAverage) {
   return 5; // Participation
 }
 
-export async function addUserPoints(userId, points, matchId) {
+export async function addUserPoints(userId, points, matchId, displayName) {
   const userRef = doc(db, 'users', userId);
   const userSnap = await getDoc(userRef);
 
@@ -148,11 +148,13 @@ export async function addUserPoints(userId, points, matchId) {
       points: (current.points || 0) + points,
       matchesRated: (current.matchesRated || 0) + 1,
       lastActive: new Date().toISOString(),
+      ...(displayName ? { displayName } : {}),
     });
   } else {
     await setDoc(userRef, {
       points,
       matchesRated: 1,
+      displayName: displayName || 'Siffleur',
       createdAt: new Date().toISOString(),
       lastActive: new Date().toISOString(),
     });

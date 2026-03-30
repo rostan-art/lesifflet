@@ -1,16 +1,16 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { themes } from '../data/themes';
-import { LEAGUES as MOCK_LEAGUES, MOCK_MATCHES, MOCK_COMMENTS, REACTION_EMOJIS, LEADERBOARD, BADGES_INFO, BEST_XI, generatePlayers } from '../data/mockData';
+import { LEAGUES as MOCK_LEAGUES, MOCK_MATCHES, MOCK_COMMENTS, REACTION_EMOJIS, BADGES_INFO, generatePlayers } from '../data/mockData';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
-import { StarRating, PulsingDot, ThemeToggle, BottomNavBar, PitchView } from '../components/UI';
+import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { AuthModal, UserBadge } from '../components/Auth';
 import { auth } from '../data/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   savePlayerRating, saveMatchRating, getUserRatings,
   getPlayerAverages, getMatchAverage, getUserProfile,
-  addUserPoints, calculatePoints,
+  addUserPoints, calculatePoints, getLeaderboard,
 } from '../data/firebaseRatings';
 
 export default function Home() {
@@ -41,6 +41,7 @@ export default function Home() {
   const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
   const [communityMatchAvg, setCommunityMatchAvg] = useState({ average: 0, count: 0 });
   const [pointsEarned, setPointsEarned] = useState(0);
+  const [realLeaderboard, setRealLeaderboard] = useState([]);
 
   // Listen for auth changes
   useEffect(() => {
@@ -55,6 +56,12 @@ export default function Home() {
     });
     return () => unsub();
   }, []);
+
+  // Load leaderboard when entering leaderboard screen
+  useEffect(() => {
+    if (screen !== 'leaderboard') return;
+    getLeaderboard(20).then(setRealLeaderboard).catch(() => {});
+  }, [screen]);
   const [realMatches, setRealMatches] = useState({});
   const [fetchedLeagues, setFetchedLeagues] = useState(new Set());
   const [realLineups, setRealLineups] = useState(null);
@@ -223,7 +230,7 @@ export default function Home() {
       }
 
       // Save points
-      await addUserPoints(user.uid, totalPoints, selectedMatch.id);
+      await addUserPoints(user.uid, totalPoints, selectedMatch.id, user.displayName);
       setPointsEarned(totalPoints);
       setUserPoints(prev => prev + totalPoints);
 
@@ -241,14 +248,13 @@ export default function Home() {
   const goBack = () => {
     if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
-    else if (screen === 'leaderboard' || screen === 'bestxi') { setScreen('home'); }
+    else if (screen === 'leaderboard') { setScreen('home'); }
   };
 
   const navigateTo = (dest) => {
     setBottomNav(dest);
     if (dest === 'home') { setScreen('home'); setSelectedLeague(null); setSelectedMatch(null); }
     else if (dest === 'leaderboard') setScreen('leaderboard');
-    else if (dest === 'bestxi') setScreen('bestxi');
   };
 
   const baseStyle = {
@@ -343,60 +349,86 @@ export default function Home() {
   // LEADERBOARD SCREEN
   // ══════════════════════════════════════
   if (screen === 'leaderboard') {
+    const lb = realLeaderboard;
+    const top3 = lb.length >= 3 ? [lb[1], lb[0], lb[2]] : [];
     return (
       <div style={baseStyle}>
         <div style={{ padding: '24px 24px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 style={{ fontSize: 24, fontWeight: 900 }}>🏅 Classement</h2>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
         </div>
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 12, padding: '8px 24px 24px' }}>
-          {[LEADERBOARD[1], LEADERBOARD[0], LEADERBOARD[2]].map((u, i) => {
-            const heights = [100, 130, 80];
-            const medals = [t.silver, t.gold, t.bronze];
-            const ranks = ['2', '1', '3'];
-            return (
-              <div key={u.name} style={{ flex: 1, textAlign: 'center', animation: `slideUp 0.5s ease ${i * 0.12}s both` }}>
-                <div style={{ fontSize: 28, marginBottom: 8 }}>{u.badges[0] || '🏅'}</div>
-                <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4, color: u.isUser ? t.accent : t.text }}>{u.name}</div>
-                <div style={{ fontSize: 11, color: t.textDim, marginBottom: 8 }}>{u.pts.toLocaleString()} pts</div>
-                <div style={{
-                  height: heights[i], borderRadius: '12px 12px 0 0',
-                  background: `linear-gradient(180deg, ${medals[i]}44, ${medals[i]}22)`,
-                  border: `1px solid ${medals[i]}44`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 28, fontWeight: 900, color: medals[i],
-                }}>{ranks[i]}</div>
-              </div>
-            );
-          })}
-        </div>
-        <div style={{ padding: '0 24px 20px' }}>
-          <h3 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 12 }}>Classement complet</h3>
-          {LEADERBOARD.map((u, i) => (
-            <div key={u.name} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              padding: '12px 16px', marginBottom: 6, borderRadius: 14,
-              background: u.isUser ? t.accentDim : t.card,
-              border: u.isUser ? `1px solid ${t.accent}44` : `1px solid ${t.border}`,
-              animation: `slideUp 0.3s ease ${i * 0.05}s both`,
-            }}>
-              <span style={{
-                width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 13, fontWeight: 900,
-                background: u.rank <= 3 ? [t.gold, t.silver, t.bronze][u.rank - 1] + '22' : 'rgba(128,128,128,0.1)',
-                color: u.rank <= 3 ? [t.gold, t.silver, t.bronze][u.rank - 1] : t.textDim,
-              }}>{u.rank}</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: u.isUser ? t.accent : t.text }}>
-                  {u.name} {u.isUser && <span style={{ fontSize: 11, fontWeight: 500, color: t.textDim }}>(toi)</span>}
-                </div>
-                <div style={{ fontSize: 11, color: t.textDim }}>{u.matchesRated} matchs notés</div>
-              </div>
-              <div style={{ display: 'flex', gap: 2 }}>{u.badges.map((b, j) => <span key={j} style={{ fontSize: 16 }}>{b}</span>)}</div>
-              <span style={{ fontSize: 14, fontWeight: 800, color: t.accent }}>{u.pts.toLocaleString()}</span>
+
+        {lb.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '60px 24px' }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>🏟️</div>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 8 }}>Pas encore de classement</div>
+            <div style={{ fontSize: 13, color: t.textDim, lineHeight: 1.6 }}>
+              Sois le premier à noter un match pour apparaître ici ! Les points sont calculés selon la proximité de tes notes avec la moyenne.
             </div>
-          ))}
-        </div>
+          </div>
+        )}
+
+        {/* Podium top 3 */}
+        {top3.length === 3 && (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 12, padding: '8px 24px 24px' }}>
+            {top3.map((u, i) => {
+              const heights = [100, 130, 80];
+              const medals = [t.silver, t.gold, t.bronze];
+              const ranks = ['2', '1', '3'];
+              const isMe = user && u.id === user.uid;
+              return (
+                <div key={u.id} style={{ flex: 1, textAlign: 'center', animation: `slideUp 0.5s ease ${i * 0.12}s both` }}>
+                  <div style={{ fontSize: 28, marginBottom: 8 }}>{i === 1 ? '🏆' : i === 0 ? '🥈' : '🥉'}</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 4, color: isMe ? t.accent : t.text }}>{u.displayName || 'Siffleur'}</div>
+                  <div style={{ fontSize: 11, color: t.textDim, marginBottom: 8 }}>{(u.points || 0).toLocaleString()} pts</div>
+                  <div style={{
+                    height: heights[i], borderRadius: '12px 12px 0 0',
+                    background: `linear-gradient(180deg, ${medals[i]}44, ${medals[i]}22)`,
+                    border: `1px solid ${medals[i]}44`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 28, fontWeight: 900, color: medals[i],
+                  }}>{ranks[i]}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Full list */}
+        {lb.length > 0 && (
+          <div style={{ padding: '0 24px 20px' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 12 }}>Classement complet</h3>
+            {lb.map((u, i) => {
+              const rank = i + 1;
+              const isMe = user && u.id === user.uid;
+              return (
+                <div key={u.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '12px 16px', marginBottom: 6, borderRadius: 14,
+                  background: isMe ? t.accentDim : t.card,
+                  border: isMe ? `1px solid ${t.accent}44` : `1px solid ${t.border}`,
+                  animation: `slideUp 0.3s ease ${i * 0.05}s both`,
+                }}>
+                  <span style={{
+                    width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 13, fontWeight: 900,
+                    background: rank <= 3 ? [t.gold, t.silver, t.bronze][rank - 1] + '22' : 'rgba(128,128,128,0.1)',
+                    color: rank <= 3 ? [t.gold, t.silver, t.bronze][rank - 1] : t.textDim,
+                  }}>{rank}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: isMe ? t.accent : t.text }}>
+                      {u.displayName || 'Siffleur'} {isMe && <span style={{ fontSize: 11, fontWeight: 500, color: t.textDim }}>(toi)</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: t.textDim }}>{u.matchesRated || 0} matchs notés</div>
+                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: t.accent }}>{(u.points || 0).toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Badges */}
         <div style={{ padding: '0 24px 100px' }}>
           <h3 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 12 }}>Badges à débloquer</h3>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -408,46 +440,6 @@ export default function Home() {
               </div>
             ))}
           </div>
-        </div>
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
-      </div>
-    );
-  }
-
-  // ══════════════════════════════════════
-  // BEST XI SCREEN
-  // ══════════════════════════════════════
-  if (screen === 'bestxi') {
-    return (
-      <div style={baseStyle}>
-        <div style={{ padding: '24px 24px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <h2 style={{ fontSize: 24, fontWeight: 900 }}>⭐ Équipe Type</h2>
-            <p style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{BEST_XI.league} · {BEST_XI.formation}</p>
-          </div>
-          <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
-        </div>
-        <div style={{ padding: '0 16px 16px' }}>
-          <PitchView players={BEST_XI.players} t={t} />
-        </div>
-        <div style={{ padding: '0 24px 100px' }}>
-          <h3 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 12 }}>Détail des notes</h3>
-          {[...BEST_XI.players].sort((a, b) => b.avg - a.avg).map((p, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
-              padding: '12px 16px', marginBottom: 6, borderRadius: 14,
-              background: i === 0 ? t.accentDim : t.card,
-              border: i === 0 ? `1px solid ${t.accent}33` : `1px solid ${t.border}`,
-              animation: `slideUp 0.3s ease ${i * 0.04}s both`,
-            }}>
-              <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 6, background: 'rgba(128,128,128,0.12)', color: t.textDim, letterSpacing: 1, minWidth: 30, textAlign: 'center' }}>{p.pos}</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{p.name}</div>
-                <div style={{ fontSize: 11, color: t.textDim }}>{p.club} · {p.votes.toLocaleString()} votes</div>
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: p.avg >= 8.5 ? t.accent : p.avg >= 7 ? '#f1c40f' : t.text }}>{p.avg}</div>
-            </div>
-          ))}
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>

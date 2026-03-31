@@ -152,11 +152,20 @@ export default function Home() {
     if (!selectedMatch) return false;
     if (selectedMatch.status === 'finished') return true;
     if (selectedMatch.status === 'live') {
-      // Extract minute number from "67'" format
       const min = parseInt(selectedMatch.minute);
       return !isNaN(min) && min >= 45;
     }
     return false;
+  }
+
+  // Is the match fully finished? (ratings can only be saved permanently when finished)
+  function isMatchFinished() {
+    return selectedMatch?.status === 'finished';
+  }
+
+  // Are we in draft mode? (live match, after halftime but not finished)
+  function isDraftMode() {
+    return canRate() && !isMatchFinished();
   }
 
   const ratePlayer = (pid, r) => {
@@ -197,10 +206,20 @@ export default function Home() {
     return 0;
   });
 
+  const [draftSaved, setDraftSaved] = useState(false);
+
   const submitAllRatings = async () => {
     if (!user) { setShowAuthModal(true); return; }
     if (!selectedMatch) return;
 
+    // DRAFT MODE: match is live — save locally only, don't push to Firebase
+    if (isDraftMode()) {
+      setDraftSaved(true);
+      setTimeout(() => setDraftSaved(false), 2500);
+      return;
+    }
+
+    // FINAL MODE: match is finished — save to Firebase permanently
     try {
       let totalPoints = 0;
 
@@ -246,7 +265,7 @@ export default function Home() {
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard') { setScreen('home'); }
   };
@@ -548,6 +567,25 @@ export default function Home() {
 
     return (
       <div style={baseStyle}>
+        {/* Draft saved overlay (during live match) */}
+        {draftSaved && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100,
+            background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div style={{ textAlign: 'center', animation: 'slideUp 0.3s ease', padding: 32 }}>
+              <div style={{ fontSize: 64, marginBottom: 16 }}>📝</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#fff', marginBottom: 8 }}>Brouillon sauvegardé !</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, lineHeight: 1.6, maxWidth: 300 }}>
+                Tes notes sont enregistrées en brouillon. Tu peux encore les modifier jusqu'à la fin du match.
+              </div>
+              <div style={{ color: '#f1c40f', fontSize: 13, fontWeight: 700, marginTop: 16 }}>
+                🏁 Ton verdict sera validé au coup de sifflet final
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Final confirmation overlay (match finished) */}
         {showConfirmation && (
           <div style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100,
@@ -556,7 +594,7 @@ export default function Home() {
             <div style={{ textAlign: 'center', animation: 'slideUp 0.3s ease' }}>
               <div style={{ fontSize: 64, marginBottom: 16 }}>✅</div>
               <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 8 }}>Coup de sifflet final !</div>
-              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 15 }}>Ton verdict a été enregistré</div>
+              <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 15 }}>Ton verdict a été enregistré définitivement</div>
               <div style={{ color: '#00e676', fontSize: 16, fontWeight: 800, marginTop: 12 }}>+{pointsEarned} pts gagnés 🎉</div>
               {pointsEarned >= 40 && <div style={{ color: '#f1c40f', fontSize: 12, marginTop: 4 }}>👁️ Œil de Lynx ! Tes notes sont proches de la moyenne</div>}
             </div>
@@ -584,6 +622,17 @@ export default function Home() {
             <span style={{ fontSize: 20, fontWeight: 800 }}>{selectedMatch.away}</span>
           </div>
         </div>
+        {/* Draft mode banner */}
+        {isDraftMode() && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            margin: '0 24px', padding: '8px 14px', borderRadius: 10,
+            background: 'rgba(241,196,15,0.08)', border: '1px solid rgba(241,196,15,0.2)',
+          }}>
+            <span style={{ fontSize: 14 }}>📝</span>
+            <span style={{ fontSize: 11, color: '#f1c40f', fontWeight: 600 }}>Mode brouillon — tes notes seront validées à la fin du match</span>
+          </div>
+        )}
         <div style={{ display: 'flex', padding: '10px 24px', gap: 6 }}>
           {['players', 'match', 'comments'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)} style={{
@@ -856,12 +905,23 @@ export default function Home() {
           <div style={{ position: 'fixed', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 'calc(100% - 48px)', maxWidth: 432, zIndex: 50 }}>
             <button onClick={submitAllRatings} style={{
               width: '100%', padding: '14px 0', borderRadius: 14, border: 'none',
-              background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+              background: isDraftMode()
+                ? 'linear-gradient(135deg, #f39c12, #f1c40f)'
+                : `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
               color: '#0a0e17', fontSize: 15, fontWeight: 800, cursor: 'pointer',
-              boxShadow: `0 8px 32px ${t.accent}44`, letterSpacing: 0.5,
+              boxShadow: isDraftMode() ? '0 8px 32px rgba(241,196,15,0.3)' : `0 8px 32px ${t.accent}44`,
+              letterSpacing: 0.5,
             }}>
-              🏁 Valider mon verdict ({ratedCount} joueur{ratedCount > 1 ? 's' : ''}{matchRating > 0 ? ' + match' : ''})
+              {isDraftMode()
+                ? `📝 Sauvegarder brouillon (${ratedCount} joueur${ratedCount > 1 ? 's' : ''}${matchRating > 0 ? ' + match' : ''})`
+                : `🏁 Valider mon verdict (${ratedCount} joueur${ratedCount > 1 ? 's' : ''}${matchRating > 0 ? ' + match' : ''})`
+              }
             </button>
+            {isDraftMode() && (
+              <div style={{ textAlign: 'center', marginTop: 6, fontSize: 10, color: t.textDim }}>
+                Verdict validé définitivement au coup de sifflet final
+              </div>
+            )}
           </div>
         )}
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />

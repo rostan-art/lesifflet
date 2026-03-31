@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { themes } from '../data/themes';
-import { LEAGUES as MOCK_LEAGUES, MOCK_MATCHES, MOCK_COMMENTS, REACTION_EMOJIS, BADGES_INFO, generatePlayers } from '../data/mockData';
+import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { AuthModal, UserBadge } from '../components/Auth';
@@ -23,7 +23,7 @@ export default function Home() {
   const [selectedTeamTab, setSelectedTeamTab] = useState('home');
   const [playerRatings, setPlayerRatings] = useState({});
   const [matchRating, setMatchRating] = useState(0);
-  const [comments, setComments] = useState(MOCK_COMMENTS);
+  const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [activeTab, setActiveTab] = useState('players');
@@ -265,7 +265,7 @@ export default function Home() {
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); setComments([]); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard') { setScreen('home'); }
   };
@@ -835,6 +835,18 @@ export default function Home() {
                         <span>{emoji}</span><span style={{ fontWeight: 700, color: t.text }}>{count}</span>
                       </span>
                     ))}
+                  </div>
+                </div>
+              )}
+              {sortedComments.length === 0 && (
+                <div style={{
+                  textAlign: 'center', padding: '40px 20px',
+                  background: t.card, borderRadius: 16, border: `1px solid ${t.border}`,
+                }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>💬</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Pas encore de commentaires</div>
+                  <div style={{ fontSize: 12, color: t.textDim, lineHeight: 1.5 }}>
+                    Sois le premier à donner ton avis sur ce match !
                   </div>
                 </div>
               )}

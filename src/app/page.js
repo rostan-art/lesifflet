@@ -5,6 +5,7 @@ import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { InstallBanner } from '../components/InstallBanner';
+import { LegalPage } from '../components/Legal';
 import { AuthModal, UserBadge } from '../components/Auth';
 import { auth } from '../data/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -37,6 +38,7 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [userPoints, setUserPoints] = useState(0);
+  const [legalPage, setLegalPage] = useState(null); // 'mentions' or 'privacy'
 
   // ── FIREBASE RATING STATE ──
   const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
@@ -286,6 +288,13 @@ export default function Home() {
   };
 
   // ══════════════════════════════════════
+  // LEGAL PAGES
+  // ══════════════════════════════════════
+  if (legalPage) {
+    return <LegalPage type={legalPage} onClose={() => setLegalPage(null)} t={t} />;
+  }
+
+  // ══════════════════════════════════════
   // HOME SCREEN
   // ══════════════════════════════════════
   if (screen === 'home') {
@@ -359,6 +368,19 @@ export default function Home() {
                 </div>
               );
             })}
+          </div>
+          {/* Legal links */}
+          <div style={{
+            display: 'flex', justifyContent: 'center', gap: 16, padding: '24px 0 8px',
+          }}>
+            <button onClick={() => setLegalPage('mentions')} style={{
+              background: 'none', border: 'none', color: t.textDim,
+              fontSize: 11, cursor: 'pointer', textDecoration: 'underline',
+            }}>Mentions légales</button>
+            <button onClick={() => setLegalPage('privacy')} style={{
+              background: 'none', border: 'none', color: t.textDim,
+              fontSize: 11, cursor: 'pointer', textDecoration: 'underline',
+            }}>Confidentialité</button>
           </div>
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />

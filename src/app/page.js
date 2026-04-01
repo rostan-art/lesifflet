@@ -4,6 +4,7 @@ import { themes } from '../data/themes';
 import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
+import { InstallBanner } from '../components/InstallBanner';
 import { AuthModal, UserBadge } from '../components/Auth';
 import { auth } from '../data/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
@@ -325,6 +326,7 @@ export default function Home() {
           />
         </div>
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
+        <InstallBanner t={t} />
         <div style={{ padding: '0 24px 100px' }}>
           <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 14 }}>Compétitions</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -13,6 +13,7 @@ import {
   savePlayerRating, saveMatchRating, getUserRatings,
   getPlayerAverages, getMatchAverage, getUserProfile,
   addUserPoints, calculatePoints, getLeaderboard,
+  toggleFavorite, getUserFavorites,
 } from '../data/firebaseRatings';
 
 export default function Home() {
@@ -40,6 +41,10 @@ export default function Home() {
   const [userPoints, setUserPoints] = useState(0);
   const [legalPage, setLegalPage] = useState(null); // 'mentions' or 'privacy'
 
+  // ── FAVORITES STATE ──
+  const [favorites, setFavorites] = useState([]); // list of favorite match objects
+  const [favMatchIds, setFavMatchIds] = useState(new Set()); // quick lookup set
+
   // ── FIREBASE RATING STATE ──
   const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
   const [communityMatchAvg, setCommunityMatchAvg] = useState({ average: 0, count: 0 });
@@ -53,8 +58,14 @@ export default function Home() {
       if (u) {
         const profile = await getUserProfile(u.uid);
         setUserPoints(profile.points || 0);
+        // Load favorites
+        const favs = await getUserFavorites(u.uid);
+        setFavorites(favs);
+        setFavMatchIds(new Set(favs.map(f => f.matchId)));
       } else {
         setUserPoints(0);
+        setFavorites([]);
+        setFavMatchIds(new Set());
       }
     });
     return () => unsub();
@@ -171,6 +182,18 @@ export default function Home() {
     return canRate() && !isMatchFinished();
   }
 
+  const handleToggleFavorite = async (match) => {
+    if (!user) { setShowAuthModal(true); return; }
+    const added = await toggleFavorite(user.uid, match);
+    if (added) {
+      setFavMatchIds(prev => new Set([...prev, match.id]));
+      setFavorites(prev => [...prev, match]);
+    } else {
+      setFavMatchIds(prev => { const s = new Set(prev); s.delete(match.id); return s; });
+      setFavorites(prev => prev.filter(f => f.matchId !== match.id));
+    }
+  };
+
   const ratePlayer = (pid, r) => {
     if (!user) { setShowAuthModal(true); return; }
     setPlayerRatings(prev => ({ ...prev, [pid]: r }));
@@ -271,11 +294,13 @@ export default function Home() {
     if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); setComments([]); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard') { setScreen('home'); }
+    else if (screen === 'favorites') { setScreen('home'); }
   };
 
   const navigateTo = (dest) => {
     setBottomNav(dest);
     if (dest === 'home') { setScreen('home'); setSelectedLeague(null); setSelectedMatch(null); }
+    else if (dest === 'favorites') { setScreen('favorites'); }
     else if (dest === 'leaderboard') setScreen('leaderboard');
   };
 
@@ -490,6 +515,95 @@ export default function Home() {
   }
 
   // ══════════════════════════════════════
+  // FAVORITES SCREEN
+  // ══════════════════════════════════════
+  if (screen === 'favorites') {
+    return (
+      <div style={baseStyle}>
+        <div style={{ padding: '24px 24px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2 style={{ fontSize: 24, fontWeight: 900 }}>⭐ Favoris</h2>
+          <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
+        </div>
+
+        {!user && (
+          <div style={{ textAlign: 'center', padding: '60px 24px' }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>👤</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Connecte-toi pour sauvegarder tes favoris</div>
+            <button onClick={() => setShowAuthModal(true)} style={{
+              padding: '12px 28px', borderRadius: 12, border: 'none', marginTop: 8,
+              background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+              color: '#0a0e17', fontSize: 14, fontWeight: 800, cursor: 'pointer',
+            }}>Se connecter</button>
+          </div>
+        )}
+
+        {user && favorites.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '60px 24px' }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>⭐</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Pas encore de favoris</div>
+            <div style={{ fontSize: 13, color: t.textDim, lineHeight: 1.6 }}>
+              Va dans un match et appuie sur l'étoile pour le retrouver ici. Prépare tes soirées foot à l'avance !
+            </div>
+          </div>
+        )}
+
+        {user && favorites.length > 0 && (
+          <div style={{ padding: '0 24px 100px' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 2, color: t.textDim, textTransform: 'uppercase', marginBottom: 12 }}>
+              {favorites.length} match{favorites.length > 1 ? 's' : ''} sauvegardé{favorites.length > 1 ? 's' : ''}
+            </div>
+            {favorites.map((fav, i) => (
+              <div key={fav.matchId || i} style={{
+                background: t.card, borderRadius: 18, padding: '16px 20px',
+                marginBottom: 10, border: `1px solid ${t.border}`,
+                boxShadow: `0 2px 8px ${t.shadowColor}`,
+                animation: `slideUp 0.3s ease ${i * 0.05}s both`,
+                position: 'relative',
+              }}>
+                {/* Remove favorite button */}
+                <button onClick={() => handleToggleFavorite({ id: fav.matchId, ...fav })} style={{
+                  position: 'absolute', top: 10, right: 12,
+                  background: 'none', border: 'none', fontSize: 18, cursor: 'pointer',
+                  color: '#f1c40f', padding: 4,
+                }}>⭐</button>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, letterSpacing: 1.5,
+                    color: fav.status === 'live' ? t.live : fav.status === 'finished' ? t.accent : t.textDim,
+                    textTransform: 'uppercase',
+                  }}>
+                    {fav.status === 'live' ? 'En direct' : fav.status === 'finished' ? 'Terminé' : 'À venir'}
+                  </span>
+                  {fav.leagueName && <span style={{ fontSize: 10, color: t.textDim }}>{fav.leagueName}</span>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 30 }}>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    {fav.homeLogo && <img src={fav.homeLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', display: 'block', margin: '0 auto 4px' }} />}
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>{fav.home}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: 70 }}>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: t.text }}>{fav.score || '- - -'}</div>
+                    {fav.time && <div style={{ fontSize: 11, color: t.accent, fontWeight: 600, marginTop: 2 }}>{fav.time}</div>}
+                  </div>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    {fav.awayLogo && <img src={fav.awayLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', display: 'block', margin: '0 auto 4px' }} />}
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>{fav.away}</div>
+                  </div>
+                </div>
+                {fav.date && <div style={{ textAlign: 'center', fontSize: 10, color: t.textDim, marginTop: 8 }}>{fav.date}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+      </div>
+    );
+  }
+
+  // ══════════════════════════════════════
   // LEAGUE SCREEN
   // ══════════════════════════════════════
   if (screen === 'league') {
@@ -549,7 +663,15 @@ export default function Home() {
                     {match.status === 'live' ? `En direct · ${match.minute}` : match.status === 'finished' ? 'Terminé' : 'À venir'}
                   </span>
                 </div>
-                <span style={{ fontSize: 11, color: t.textDim }}>{match.date}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 11, color: t.textDim }}>{match.date}</span>
+                  <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite({ ...match, leagueName: selectedLeague?.name || '' }); }} style={{
+                    background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', padding: '2px 4px',
+                    color: favMatchIds.has(match.id) ? '#f1c40f' : t.textDim,
+                    transition: 'transform 0.2s',
+                    transform: favMatchIds.has(match.id) ? 'scale(1.2)' : 'scale(1)',
+                  }}>{favMatchIds.has(match.id) ? '⭐' : '☆'}</button>
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ flex: 1, textAlign: 'center' }}>
@@ -638,7 +760,13 @@ export default function Home() {
                 {selectedMatch.status === 'live' ? `Direct · ${selectedMatch.minute}` : selectedMatch.status === 'finished' ? 'Terminé' : 'À venir'}
               </span>
             </div>
-            <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => handleToggleFavorite({ ...selectedMatch, leagueName: selectedLeague?.name || '' })} style={{
+                background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', padding: '4px 6px',
+                color: favMatchIds.has(selectedMatch.id) ? '#f1c40f' : t.textDim,
+              }}>{favMatchIds.has(selectedMatch.id) ? '⭐' : '☆'}</button>
+              <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 20, fontWeight: 800 }}>{selectedMatch.home}</span>

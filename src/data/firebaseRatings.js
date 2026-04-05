@@ -1,7 +1,7 @@
 import { db } from './firebase';
 import {
   doc, setDoc, getDoc, getDocs, collection,
-  query, where, onSnapshot, increment, updateDoc, deleteField
+  query, where, onSnapshot, increment, updateDoc, deleteField, deleteDoc
 } from 'firebase/firestore';
 
 // ── PLAYER RATINGS ──
@@ -180,4 +180,62 @@ export async function getLeaderboard(limit = 20) {
   });
   users.sort((a, b) => (b.points || 0) - (a.points || 0));
   return users.slice(0, limit);
+}
+
+// ── FAVORITES ──
+
+export async function toggleFavorite(userId, match) {
+  const favRef = doc(db, 'favorites', `${userId}_${match.id}`);
+  const snap = await getDoc(favRef);
+
+  if (snap.exists()) {
+    await deleteDoc(favRef);
+    return false; // removed
+  } else {
+    await setDoc(favRef, {
+      userId,
+      matchId: match.id,
+      home: match.home,
+      away: match.away,
+      date: match.date || '',
+      time: match.time || '',
+      status: match.status || '',
+      score: match.score || '',
+      homeId: match.homeId || '',
+      awayId: match.awayId || '',
+      homeLogo: match.homeLogo || '',
+      awayLogo: match.awayLogo || '',
+      fixtureId: match.fixtureId || '',
+      leagueName: match.leagueName || '',
+      addedAt: new Date().toISOString(),
+    });
+    return true; // added
+  }
+}
+
+export async function getUserFavorites(userId) {
+  const q = query(
+    collection(db, 'favorites'),
+    where('userId', '==', userId)
+  );
+  const snapshot = await getDocs(q);
+  const favs = [];
+  snapshot.forEach(d => {
+    favs.push({ id: d.data().matchId, ...d.data() });
+  });
+  // Sort: upcoming first, then by date
+  favs.sort((a, b) => {
+    if (a.status === 'upcoming' && b.status !== 'upcoming') return -1;
+    if (a.status !== 'upcoming' && b.status === 'upcoming') return 1;
+    if (a.status === 'live' && b.status !== 'live') return -1;
+    if (a.status !== 'live' && b.status === 'live') return 1;
+    return 0;
+  });
+  return favs;
+}
+
+export async function isFavorited(userId, matchId) {
+  const favRef = doc(db, 'favorites', `${userId}_${matchId}`);
+  const snap = await getDoc(favRef);
+  return snap.exists();
 }

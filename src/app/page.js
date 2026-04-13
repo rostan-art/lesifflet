@@ -14,6 +14,9 @@ import {
   getPlayerAverages, getMatchAverage, getUserProfile,
   addUserPoints, calculatePoints, getLeaderboard,
   toggleFavorite, getUserFavorites,
+  sendGlobalMessage, getGlobalMessages, reactToGlobalMessage,
+  sendMatchComment, getMatchComments, reactToMatchComment,
+  getTopPlayers, getTopMatches, getPublicProfile,
 } from '../data/firebaseRatings';
 
 export default function Home() {
@@ -44,6 +47,23 @@ export default function Home() {
   // ── FAVORITES STATE ──
   const [favorites, setFavorites] = useState([]); // list of favorite match objects
   const [favMatchIds, setFavMatchIds] = useState(new Set()); // quick lookup set
+
+  // ── PROFILE STATE ──
+  const [showProfile, setShowProfile] = useState(false);
+  const [viewedProfile, setViewedProfile] = useState(null); // public profile of another user
+  const [viewedProfileData, setViewedProfileData] = useState(null);
+
+  // ── GLOBAL CHAT STATE ──
+  const [globalMessages, setGlobalMessages] = useState([]);
+  const [globalNewMsg, setGlobalNewMsg] = useState('');
+  const [globalReplyTo, setGlobalReplyTo] = useState(null);
+
+  // ── TOP PERFORMANCES ──
+  const [topPlayers, setTopPlayers] = useState([]);
+  const [topMatches, setTopMatches] = useState([]);
+
+  // ── COMMENT REPLIES ──
+  const [replyTo, setReplyTo] = useState(null); // { id, user, text } of comment being replied to
 
   // ── FIREBASE RATING STATE ──
   const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
@@ -76,6 +96,38 @@ export default function Home() {
     if (screen !== 'leaderboard') return;
     getLeaderboard(20).then(setRealLeaderboard).catch(() => {});
   }, [screen]);
+
+  // Load top performances on home screen
+  useEffect(() => {
+    if (screen !== 'home') return;
+    getTopPlayers(5).then(setTopPlayers).catch(() => {});
+    getTopMatches(5).then(setTopMatches).catch(() => {});
+  }, [screen]);
+
+  // Load global chat messages
+  useEffect(() => {
+    if (screen !== 'globalchat') return;
+    getGlobalMessages(50).then(setGlobalMessages).catch(() => {});
+  }, [screen]);
+
+  // Load match comments when entering a match
+  useEffect(() => {
+    if (!selectedMatch) return;
+    getMatchComments(selectedMatch.id).then(setComments).catch(() => {});
+  }, [selectedMatch]);
+
+  // View another user's profile
+  const openUserProfile = async (userId, displayName) => {
+    if (!userId) return;
+    setViewedProfile({ id: userId, displayName });
+    setScreen('userprofile');
+    try {
+      const data = await getPublicProfile(userId);
+      setViewedProfileData(data);
+    } catch (e) {
+      setViewedProfileData(null);
+    }
+  };
   const [realMatches, setRealMatches] = useState({});
   const [fetchedLeagues, setFetchedLeagues] = useState(new Set());
   const [realLineups, setRealLineups] = useState(null);
@@ -199,15 +251,19 @@ export default function Home() {
     setPlayerRatings(prev => ({ ...prev, [pid]: r }));
   };
 
-  const submitComment = () => {
+  const submitComment = async () => {
     if (!user) { setShowAuthModal(true); return; }
     if (!newComment.trim()) return;
-    const newId = 'c_' + Date.now();
-    setComments(prev => [{ id: newId, user: user.displayName || 'Siffleur', text: newComment, time: "à l'instant", reactions: {} }, ...prev]);
+    const replyData = replyTo ? { id: replyTo.id, user: replyTo.displayName || replyTo.user, text: replyTo.text } : null;
+    await sendMatchComment(user.uid, user.displayName, selectedMatch.id, newComment.trim(), replyData);
     setNewComment('');
+    setReplyTo(null);
+    // Refresh comments
+    const updated = await getMatchComments(selectedMatch.id);
+    setComments(updated);
   };
 
-  const toggleReaction = (commentId, emoji) => {
+  const toggleReaction = async (commentId, emoji) => {
     const key = `${commentId}_${emoji}`;
     const alreadyReacted = userReactions[key];
     setUserReactions(prev => ({ ...prev, [key]: !alreadyReacted }));
@@ -223,6 +279,7 @@ export default function Home() {
       return { ...c, reactions };
     }));
     setEmojiPickerOpen(null);
+    await reactToMatchComment(commentId, emoji, alreadyReacted ? -1 : 1);
   };
 
   const getTotalReactions = (c) => Object.values(c.reactions || {}).reduce((a, b) => a + b, 0);
@@ -295,12 +352,15 @@ export default function Home() {
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
     else if (screen === 'leaderboard') { setScreen('home'); }
     else if (screen === 'favorites') { setScreen('home'); }
+    else if (screen === 'globalchat') { setScreen('home'); }
+    else if (screen === 'userprofile') { setScreen('home'); setViewedProfile(null); setViewedProfileData(null); }
   };
 
   const navigateTo = (dest) => {
     setBottomNav(dest);
     if (dest === 'home') { setScreen('home'); setSelectedLeague(null); setSelectedMatch(null); }
     else if (dest === 'favorites') { setScreen('favorites'); }
+    else if (dest === 'globalchat') { setScreen('globalchat'); }
     else if (dest === 'leaderboard') setScreen('leaderboard');
   };
 
@@ -327,15 +387,28 @@ export default function Home() {
       <div style={baseStyle}>
         <div style={{ padding: '40px 24px 16px', animation: 'fadeIn 0.6s ease' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <h1 style={{
-                fontSize: 38, fontWeight: 900, letterSpacing: -1.5,
-                background: `linear-gradient(135deg, ${t.text} 0%, ${t.accent} 100%)`,
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-              }}>🏟️ LeSifflet</h1>
-              <p style={{ color: t.textDim, fontSize: 13, fontWeight: 400, letterSpacing: 2, textTransform: 'uppercase', marginTop: 4 }}>
-                Le verdict des supporters
-              </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {/* Profile avatar */}
+              <div onClick={() => user ? setShowProfile(true) : setShowAuthModal(true)} style={{
+                width: 40, height: 40, borderRadius: '50%', cursor: 'pointer',
+                background: user ? `linear-gradient(135deg, ${t.accent}, #00b0ff)` : t.toggleBg,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 16, fontWeight: 800, color: user ? '#fff' : t.textDim,
+                border: `2px solid ${user ? t.accent + '44' : t.border}`,
+                transition: 'all 0.2s',
+              }}>
+                {user ? (user.displayName || 'S')[0].toUpperCase() : '👤'}
+              </div>
+              <div>
+                <h1 style={{
+                  fontSize: 32, fontWeight: 900, letterSpacing: -1.5,
+                  background: `linear-gradient(135deg, ${t.text} 0%, ${t.accent} 100%)`,
+                  WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                }}>LeSifflet</h1>
+                <p style={{ color: t.textDim, fontSize: 11, fontWeight: 400, letterSpacing: 2, textTransform: 'uppercase', marginTop: 2 }}>
+                  Le verdict des supporters
+                </p>
+              </div>
             </div>
             <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
           </div>
@@ -361,7 +434,92 @@ export default function Home() {
         </div>
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
         <InstallBanner t={t} />
+
+        {/* Profile modal */}
+        {showProfile && user && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 24, backdropFilter: 'blur(8px)',
+          }} onClick={() => setShowProfile(false)}>
+            <div style={{
+              background: t.gradient, borderRadius: 24, padding: 28, width: '100%', maxWidth: 360,
+              border: `1px solid ${t.border}`, boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                <div style={{
+                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 12px',
+                  background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 28, fontWeight: 900, color: '#fff',
+                }}>{(user.displayName || 'S')[0].toUpperCase()}</div>
+                <div style={{ fontSize: 20, fontWeight: 800 }}>{user.displayName || 'Siffleur'}</div>
+                <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{user.email}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+                {[
+                  { label: 'Points', value: userPoints },
+                  { label: 'Matchs notés', value: '-' },
+                  { label: 'Favoris', value: favorites.length },
+                ].map((s, i) => (
+                  <div key={i} style={{
+                    flex: 1, textAlign: 'center', padding: '14px 8px',
+                    background: t.card, borderRadius: 14, border: `1px solid ${t.border}`,
+                  }}>
+                    <div style={{ fontSize: 20, fontWeight: 900, color: t.accent }}>{s.value}</div>
+                    <div style={{ fontSize: 10, color: t.textDim, marginTop: 4 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => { signOut(auth); setShowProfile(false); }} style={{
+                width: '100%', padding: '12px 0', borderRadius: 12, border: `1px solid ${t.border}`,
+                background: t.card, color: '#e74c3c', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              }}>Se déconnecter</button>
+            </div>
+          </div>
+        )}
+
         <div style={{ padding: '0 24px 100px' }}>
+          {/* TOP PERFORMANCES */}
+          {(topPlayers.length > 0 || topMatches.length > 0) && (
+            <div style={{ marginBottom: 24 }}>
+              {topPlayers.length > 0 && (
+                <>
+                  <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>Top joueurs</h2>
+                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
+                    {topPlayers.map((p, i) => (
+                      <div key={i} style={{
+                        minWidth: 110, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                        background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
+                      }}>
+                        <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{p.average}</div>
+                        <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{p.count} votes</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {topMatches.length > 0 && (
+                <>
+                  <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>Top matchs</h2>
+                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
+                    {topMatches.map((m, i) => (
+                      <div key={i} style={{
+                        minWidth: 120, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                        background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
+                      }}>
+                        <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{m.average}</div>
+                        <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 14 }}>Compétitions</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {LEAGUES.map((league, i) => {
@@ -598,6 +756,211 @@ export default function Home() {
         )}
 
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+      </div>
+    );
+  }
+
+  // ══════════════════════════════════════
+  // GLOBAL CHAT SCREEN
+  // ══════════════════════════════════════
+  if (screen === 'globalchat') {
+    const submitGlobalMsg = async () => {
+      if (!user) { setShowAuthModal(true); return; }
+      if (!globalNewMsg.trim()) return;
+      const replyData = globalReplyTo ? { id: globalReplyTo.id, user: globalReplyTo.displayName, text: globalReplyTo.text } : null;
+      await sendGlobalMessage(user.uid, user.displayName, globalNewMsg.trim(), replyData);
+      setGlobalNewMsg('');
+      setGlobalReplyTo(null);
+      const updated = await getGlobalMessages(50);
+      setGlobalMessages(updated);
+    };
+
+    const toggleGlobalReaction = async (msgId, emoji) => {
+      const key = `g_${msgId}_${emoji}`;
+      const already = userReactions[key];
+      setUserReactions(prev => ({ ...prev, [key]: !already }));
+      setGlobalMessages(prev => prev.map(m => {
+        if (m.id !== msgId) return m;
+        const reactions = { ...m.reactions };
+        if (already) { reactions[emoji] = Math.max(0, (reactions[emoji] || 1) - 1); if (reactions[emoji] === 0) delete reactions[emoji]; }
+        else { reactions[emoji] = (reactions[emoji] || 0) + 1; }
+        return { ...m, reactions };
+      }));
+      await reactToGlobalMessage(msgId, emoji, already ? -1 : 1);
+    };
+
+    const timeAgo = (ts) => {
+      const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+      if (diff < 60) return "à l'instant";
+      if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`;
+      if (diff < 86400) return `il y a ${Math.floor(diff / 3600)}h`;
+      return `il y a ${Math.floor(diff / 86400)}j`;
+    };
+
+    return (
+      <div style={baseStyle}>
+        <div style={{ padding: '24px 24px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <h2 style={{ fontSize: 24, fontWeight: 900 }}>💬 Chat global</h2>
+          <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
+        </div>
+        <div style={{ padding: '0 24px', fontSize: 12, color: t.textDim, marginBottom: 14 }}>
+          Discute foot avec toute la communauté LeSifflet
+        </div>
+
+        {/* Message input */}
+        <div style={{ padding: '0 24px 10px' }}>
+          {globalReplyTo && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '8px 12px', marginBottom: 6, borderRadius: 10,
+              background: t.accentDim, border: `1px solid ${t.accent}33`, fontSize: 11,
+            }}>
+              <span style={{ color: t.textDim }}>Réponse à <span style={{ color: t.accent, fontWeight: 700 }}>{globalReplyTo.displayName}</span></span>
+              <button onClick={() => setGlobalReplyTo(null)} style={{ background: 'none', border: 'none', color: t.textDim, fontSize: 14, cursor: 'pointer' }}>✕</button>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, background: t.card, borderRadius: 14, padding: 8, border: `1px solid ${t.border}` }}>
+            <input value={globalNewMsg} onChange={e => setGlobalNewMsg(e.target.value)} onKeyDown={e => e.key === 'Enter' && submitGlobalMsg()}
+              placeholder="Ton message..."
+              style={{ flex: 1, background: t.inputBg, border: 'none', outline: 'none', color: t.text, fontSize: 13, padding: '8px 10px', fontFamily: 'inherit', borderRadius: 8 }}
+            />
+            <button onClick={submitGlobalMsg} style={{
+              background: t.accent, border: 'none', borderRadius: 10,
+              color: t.btnText, padding: '8px 14px', fontWeight: 700, fontSize: 12, cursor: 'pointer',
+            }}>Envoyer</button>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div style={{ padding: '0 24px 100px', overflowY: 'auto', maxHeight: 'calc(100vh - 240px)' }}>
+          {globalMessages.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '50px 20px' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Pas encore de messages</div>
+              <div style={{ fontSize: 12, color: t.textDim }}>Sois le premier à lancer la discussion !</div>
+            </div>
+          )}
+          {globalMessages.map((msg, i) => (
+            <div key={msg.id} style={{
+              background: t.card, borderRadius: 16, padding: '12px 14px', marginBottom: 8,
+              border: `1px solid ${t.border}`, animation: `slideUp 0.2s ease ${i * 0.03}s both`,
+            }}>
+              {/* Reply reference */}
+              {msg.replyTo && (
+                <div style={{
+                  padding: '6px 10px', marginBottom: 8, borderRadius: 8,
+                  borderLeft: `3px solid ${t.accent}`, background: t.accentDim, fontSize: 11,
+                }}>
+                  <span style={{ fontWeight: 700, color: t.accent }}>{msg.replyTo.user}</span>
+                  <span style={{ color: t.textDim, marginLeft: 6 }}>{msg.replyTo.text?.slice(0, 80)}{msg.replyTo.text?.length > 80 ? '...' : ''}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span onClick={() => openUserProfile(msg.userId, msg.displayName)} style={{ fontSize: 13, fontWeight: 700, color: t.accent, cursor: 'pointer' }}>{msg.displayName}</span>
+                <span style={{ fontSize: 10, color: t.textDim }}>{timeAgo(msg.timestamp)}</span>
+              </div>
+              <p style={{ fontSize: 14, color: t.text, lineHeight: 1.5, marginBottom: 8 }}>{msg.text}</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {/* Reactions */}
+                {Object.entries(msg.reactions || {}).filter(([, c]) => c > 0).map(([emoji, count]) => (
+                  <button key={emoji} onClick={() => toggleGlobalReaction(msg.id, emoji)} style={{
+                    display: 'flex', alignItems: 'center', gap: 3, padding: '3px 8px', borderRadius: 16,
+                    background: userReactions[`g_${msg.id}_${emoji}`] ? t.accentDim : t.toggleBg,
+                    border: userReactions[`g_${msg.id}_${emoji}`] ? `1px solid ${t.accent}33` : `1px solid ${t.border}`,
+                    fontSize: 12, cursor: 'pointer', color: t.text,
+                  }}><span>{emoji}</span><span style={{ fontWeight: 700 }}>{count}</span></button>
+                ))}
+                {/* Add reaction */}
+                {REACTION_EMOJIS.slice(0, 4).map(emoji => (
+                  !msg.reactions?.[emoji] && <button key={emoji} onClick={() => toggleGlobalReaction(msg.id, emoji)} style={{
+                    padding: '3px 6px', borderRadius: 16, background: t.toggleBg, border: `1px solid ${t.border}`,
+                    fontSize: 12, cursor: 'pointer', opacity: 0.4,
+                  }}>{emoji}</button>
+                ))}
+                {/* Reply button */}
+                <button onClick={() => setGlobalReplyTo(msg)} style={{
+                  padding: '3px 8px', borderRadius: 16, background: t.toggleBg, border: `1px solid ${t.border}`,
+                  fontSize: 11, cursor: 'pointer', color: t.textDim, fontWeight: 600, marginLeft: 'auto',
+                }}>↩ Répondre</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+      </div>
+    );
+  }
+
+  // ══════════════════════════════════════
+  // USER PROFILE SCREEN
+  // ══════════════════════════════════════
+  if (screen === 'userprofile' && viewedProfile) {
+    const p = viewedProfileData;
+    return (
+      <div style={baseStyle}>
+        <div style={{ padding: '20px 24px 12px' }}>
+          <button onClick={goBack} style={{
+            background: t.toggleBg, border: `1px solid ${t.border}`, color: t.text,
+            width: 34, height: 34, borderRadius: 10, fontSize: 16, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>←</button>
+        </div>
+        <div style={{ textAlign: 'center', padding: '10px 24px 24px' }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: '50%', margin: '0 auto 14px',
+            background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 32, fontWeight: 900, color: '#fff',
+          }}>{(viewedProfile.displayName || '?')[0].toUpperCase()}</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{viewedProfile.displayName || 'Siffleur'}</div>
+          {p && <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>Membre depuis {new Date(p.createdAt).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}</div>}
+        </div>
+
+        {p ? (
+          <div style={{ padding: '0 24px 100px' }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+              {[
+                { icon: '🏅', label: 'Points', value: p.points || 0 },
+                { icon: '⚽', label: 'Notes', value: p.totalRatings || 0 },
+                { icon: '💬', label: 'Messages', value: p.totalComments || 0 },
+                { icon: '🏟️', label: 'Matchs', value: p.matchesRated || 0 },
+              ].map((s, i) => (
+                <div key={i} style={{
+                  flex: 1, textAlign: 'center', padding: '16px 6px',
+                  background: t.card, borderRadius: 14, border: `1px solid ${t.border}`,
+                }}>
+                  <div style={{ fontSize: 16, marginBottom: 4 }}>{s.icon}</div>
+                  <div style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{s.value}</div>
+                  <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Rank info */}
+            <div style={{
+              padding: '16px 20px', borderRadius: 16, marginBottom: 16,
+              background: t.accentDim, border: `1px solid ${t.accent}33`,
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              <span style={{ fontSize: 28 }}>🏆</span>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>Siffleur niveau {Math.floor((p.points || 0) / 100) + 1}</div>
+                <div style={{ fontSize: 11, color: t.textDim }}>{p.points || 0} points au total</div>
+              </div>
+            </div>
+
+            {/* Last active */}
+            {p.lastActive && (
+              <div style={{ fontSize: 12, color: t.textDim, textAlign: 'center' }}>
+                Dernière activité : {new Date(p.lastActive).toLocaleDateString('fr-FR')}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '40px 24px', color: t.textDim }}>Chargement...</div>
+        )}
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
     );
@@ -944,9 +1307,20 @@ export default function Home() {
           {/* COMMENTS TAB */}
           {activeTab === 'comments' && (
             <div style={{ animation: 'slideUp 0.3s ease' }}>
+              {/* Reply banner */}
+              {replyTo && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '8px 12px', marginBottom: 6, borderRadius: 10,
+                  background: t.accentDim, border: `1px solid ${t.accent}33`, fontSize: 11,
+                }}>
+                  <span style={{ color: t.textDim }}>Réponse à <span style={{ color: t.accent, fontWeight: 700 }}>{replyTo.displayName || replyTo.user}</span></span>
+                  <button onClick={() => setReplyTo(null)} style={{ background: 'none', border: 'none', color: t.textDim, fontSize: 14, cursor: 'pointer' }}>✕</button>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, marginBottom: 12, background: t.card, borderRadius: 14, padding: 8, border: `1px solid ${t.border}` }}>
                 <input value={newComment} onChange={e => setNewComment(e.target.value)} onKeyDown={e => e.key === 'Enter' && submitComment()}
-                  placeholder="Ton commentaire..."
+                  placeholder={replyTo ? `Répondre à ${replyTo.displayName || replyTo.user}...` : "Ton commentaire..."}
                   style={{ flex: 1, background: t.inputBg, border: 'none', outline: 'none', color: t.text, fontSize: 13, padding: '8px 10px', fontFamily: 'inherit', borderRadius: 8 }}
                 />
                 <button onClick={submitComment} style={{
@@ -1004,14 +1378,36 @@ export default function Home() {
               )}
               {sortedComments.map((c, i) => {
                 const isPickerOpen = emojiPickerOpen === c.id;
+                const timeAgo = (ts) => {
+                  if (!ts) return '';
+                  const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+                  if (diff < 60) return "à l'instant";
+                  if (diff < 3600) return `${Math.floor(diff / 60)} min`;
+                  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+                  return `${Math.floor(diff / 86400)}j`;
+                };
                 return (
                   <div key={c.id} style={{
                     background: t.card, borderRadius: 14, padding: '12px 14px', marginBottom: 8,
                     border: `1px solid ${t.border}`, animation: `slideUp 0.3s ease ${i * 0.03}s both`, position: 'relative',
                   }}>
+                    {/* Reply reference */}
+                    {c.replyTo && (
+                      <div style={{
+                        padding: '6px 10px', marginBottom: 8, borderRadius: 8,
+                        borderLeft: `3px solid ${t.accent}`, background: t.accentDim, fontSize: 11,
+                      }}>
+                        <span style={{ fontWeight: 700, color: t.accent }}>{c.replyTo.user}</span>
+                        <span style={{ color: t.textDim, marginLeft: 6 }}>{c.replyTo.text?.slice(0, 60)}{c.replyTo.text?.length > 60 ? '...' : ''}</span>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: c.user === 'Toi' ? t.accent : t.text }}>{c.user}</span>
-                      <span style={{ fontSize: 10, color: t.textDim }}>{c.time}</span>
+                      <span onClick={() => c.userId && openUserProfile(c.userId, c.displayName)} style={{
+                        fontSize: 12, fontWeight: 700,
+                        color: (user && c.userId === user.uid) ? t.accent : t.text,
+                        cursor: c.userId ? 'pointer' : 'default',
+                      }}>{c.displayName || c.user || 'Siffleur'}</span>
+                      <span style={{ fontSize: 10, color: t.textDim }}>{timeAgo(c.timestamp) || c.time}</span>
                     </div>
                     <p style={{ fontSize: 13, color: isDark ? 'rgba(237,242,247,0.85)' : 'rgba(26,26,46,0.8)', lineHeight: 1.5, marginBottom: 8 }}>{c.text}</p>
                     <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1037,6 +1433,11 @@ export default function Home() {
                         cursor: 'pointer', fontSize: 13,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s ease',
                       }}>{isPickerOpen ? '✕' : '+'}</button>
+                      {/* Reply button */}
+                      <button onClick={() => setReplyTo(c)} style={{
+                        padding: '3px 8px', borderRadius: 16, background: t.toggleBg, border: `1px solid ${t.border}`,
+                        fontSize: 11, cursor: 'pointer', color: t.textDim, fontWeight: 600, marginLeft: 'auto',
+                      }}>↩ Répondre</button>
                     </div>
                     {isPickerOpen && (
                       <div style={{

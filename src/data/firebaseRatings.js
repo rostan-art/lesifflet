@@ -239,3 +239,134 @@ export async function isFavorited(userId, matchId) {
   const snap = await getDoc(favRef);
   return snap.exists();
 }
+
+// ── GLOBAL CHAT ──
+
+export async function sendGlobalMessage(userId, displayName, text, replyTo = null) {
+  const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const msgRef = doc(db, 'globalChat', msgId);
+  await setDoc(msgRef, {
+    id: msgId,
+    userId,
+    displayName: displayName || 'Siffleur',
+    text,
+    replyTo: replyTo || null, // { id, user, text } of parent message
+    reactions: {},
+    timestamp: new Date().toISOString(),
+  });
+  return msgId;
+}
+
+export async function getGlobalMessages(limit = 50) {
+  const snapshot = await getDocs(collection(db, 'globalChat'));
+  const msgs = [];
+  snapshot.forEach(d => msgs.push({ id: d.id, ...d.data() }));
+  msgs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  return msgs.slice(0, limit);
+}
+
+export async function reactToGlobalMessage(msgId, emoji, delta) {
+  const msgRef = doc(db, 'globalChat', msgId);
+  const snap = await getDoc(msgRef);
+  if (snap.exists()) {
+    const data = snap.data();
+    const reactions = { ...data.reactions };
+    reactions[emoji] = Math.max(0, (reactions[emoji] || 0) + delta);
+    if (reactions[emoji] === 0) delete reactions[emoji];
+    await updateDoc(msgRef, { reactions });
+  }
+}
+
+// ── MATCH COMMENTS (with replies) ──
+
+export async function sendMatchComment(userId, displayName, matchId, text, replyTo = null) {
+  const msgId = `cmt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const msgRef = doc(db, 'matchComments', msgId);
+  await setDoc(msgRef, {
+    id: msgId,
+    userId,
+    displayName: displayName || 'Siffleur',
+    matchId,
+    text,
+    replyTo: replyTo || null,
+    reactions: {},
+    timestamp: new Date().toISOString(),
+  });
+  // Increment user comment count
+  const userRef = doc(db, 'users', userId);
+  const userSnap = await getDoc(userRef);
+  if (userSnap.exists()) {
+    await updateDoc(userRef, { commentsCount: (userSnap.data().commentsCount || 0) + 1 });
+  }
+  return msgId;
+}
+
+export async function getMatchComments(matchId) {
+  const q = query(collection(db, 'matchComments'), where('matchId', '==', matchId));
+  const snapshot = await getDocs(q);
+  const msgs = [];
+  snapshot.forEach(d => msgs.push({ id: d.id, ...d.data() }));
+  msgs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  return msgs;
+}
+
+export async function reactToMatchComment(msgId, emoji, delta) {
+  const msgRef = doc(db, 'matchComments', msgId);
+  const snap = await getDoc(msgRef);
+  if (snap.exists()) {
+    const data = snap.data();
+    const reactions = { ...data.reactions };
+    reactions[emoji] = Math.max(0, (reactions[emoji] || 0) + delta);
+    if (reactions[emoji] === 0) delete reactions[emoji];
+    await updateDoc(msgRef, { reactions });
+  }
+}
+
+// ── TOP PERFORMANCES ──
+
+export async function getTopPlayers(limit = 5) {
+  const snapshot = await getDocs(collection(db, 'playerAverages'));
+  const players = [];
+  snapshot.forEach(d => {
+    const data = d.data();
+    if (data.count >= 3) { // minimum 3 votes to appear
+      players.push(data);
+    }
+  });
+  players.sort((a, b) => b.average - a.average);
+  return players.slice(0, limit);
+}
+
+export async function getTopMatches(limit = 5) {
+  const snapshot = await getDocs(collection(db, 'matchAverages'));
+  const matches = [];
+  snapshot.forEach(d => {
+    const data = d.data();
+    if (data.count >= 3) {
+      matches.push({ id: d.id, ...data });
+    }
+  });
+  matches.sort((a, b) => b.average - a.average);
+  return matches.slice(0, limit);
+}
+
+// ── USER PUBLIC PROFILE ──
+
+export async function getPublicProfile(userId) {
+  const profile = await getUserProfile(userId);
+  // Count comments
+  const q = query(collection(db, 'matchComments'), where('userId', '==', userId));
+  const commentSnap = await getDocs(q);
+  const globalQ = query(collection(db, 'globalChat'), where('userId', '==', userId));
+  const globalSnap = await getDocs(globalQ);
+  // Count ratings
+  const ratingsQ = query(collection(db, 'playerRatings'), where('userId', '==', userId));
+  const ratingsSnap = await getDocs(ratingsQ);
+  
+  return {
+    ...profile,
+    id: userId,
+    totalComments: commentSnap.size + globalSnap.size,
+    totalRatings: ratingsSnap.size,
+  };
+}

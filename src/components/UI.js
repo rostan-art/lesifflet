@@ -62,6 +62,7 @@ export function BottomNavBar({ isDark, t, bottomNav, onNavigate }) {
       {[
         { id: 'home', icon: '🏟️', label: 'Matchs' },
         { id: 'favorites', icon: '⭐', label: 'Favoris' },
+        { id: 'globalchat', icon: '💬', label: 'Chat' },
         { id: 'leaderboard', icon: '🏅', label: 'Classement' },
       ].map(nav => (
         <button key={nav.id} onClick={() => onNavigate(nav.id)} style={{

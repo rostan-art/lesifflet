@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import { themes } from '../data/themes';
 import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
+import { getClubById, POPULAR_CLUBS } from '../data/clubs';
+import { BADGES, LEVELS, getLevelFromPoints, computeUnlockedBadges, WEEKLY_QUESTS } from '../data/badges';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { InstallBanner } from '../components/InstallBanner';
@@ -17,6 +19,8 @@ import {
   sendGlobalMessage, getGlobalMessages, reactToGlobalMessage,
   sendMatchComment, getMatchComments, reactToMatchComment,
   getTopPlayers, getTopMatches, getPublicProfile,
+  updateFavoriteClub, awardBadge, updateDailyStreak,
+  incrementLynxCount, incrementChatCount,
 } from '../data/firebaseRatings';
 
 export default function Home() {
@@ -40,6 +44,7 @@ export default function Home() {
 
   // ── AUTH STATE ──
   const [user, setUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null); // Firestore user doc (includes favoriteClub)
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [userPoints, setUserPoints] = useState(0);
   const [legalPage, setLegalPage] = useState(null); // 'mentions' or 'privacy'
@@ -50,6 +55,7 @@ export default function Home() {
 
   // ── PROFILE STATE ──
   const [showProfile, setShowProfile] = useState(false);
+  const [showClubPicker, setShowClubPicker] = useState(false);
   const [viewedProfile, setViewedProfile] = useState(null); // public profile of another user
   const [viewedProfileData, setViewedProfileData] = useState(null);
 
@@ -65,6 +71,13 @@ export default function Home() {
   // ── COMMENT REPLIES ──
   const [replyTo, setReplyTo] = useState(null); // { id, user, text } of comment being replied to
 
+  // ── LEAGUE FILTER ──
+  const [leagueFilter, setLeagueFilter] = useState(null); // 'live' | 'upcoming' | 'finished'
+
+  // ── BADGE TOAST ──
+  const [badgeToast, setBadgeToast] = useState(null); // { icon, name, bonus }
+  const [dailyStreakToast, setDailyStreakToast] = useState(null); // { streak, bonus }
+
   // ── FIREBASE RATING STATE ──
   const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
   const [communityMatchAvg, setCommunityMatchAvg] = useState({ average: 0, count: 0 });
@@ -76,14 +89,56 @@ export default function Home() {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
+        // Daily streak bonus
+        const streakResult = await updateDailyStreak(u.uid);
+        if (streakResult.newDay && streakResult.bonus > 0) {
+          setDailyStreakToast({ streak: streakResult.streak, bonus: streakResult.bonus });
+          setTimeout(() => setDailyStreakToast(null), 4000);
+        }
+
         const profile = await getUserProfile(u.uid);
         setUserPoints(profile.points || 0);
+        setUserProfile(profile);
+
         // Load favorites
         const favs = await getUserFavorites(u.uid);
         setFavorites(favs);
         setFavMatchIds(new Set(favs.map(f => f.matchId)));
+
+        // Check badge unlocks
+        try {
+          const publicData = await getPublicProfile(u.uid);
+          const unlockedNow = computeUnlockedBadges(profile, {
+            totalRatings: publicData.totalRatings,
+            totalComments: publicData.totalComments,
+            favoritesCount: publicData.favoritesCount,
+          });
+          const alreadyEarned = profile.earnedBadges || [];
+          const newlyEarned = unlockedNow.filter(id => !alreadyEarned.includes(id));
+          // Award new badges one by one
+          for (const badgeId of newlyEarned) {
+            const badge = BADGES.find(b => b.id === badgeId);
+            if (badge) {
+              await awardBadge(u.uid, badgeId, badge.bonus);
+              // Show toast for the first new badge
+              if (badgeId === newlyEarned[0]) {
+                setBadgeToast(badge);
+                setTimeout(() => setBadgeToast(null), 4500);
+              }
+            }
+          }
+          // Refresh profile after awards
+          if (newlyEarned.length > 0) {
+            const refreshed = await getUserProfile(u.uid);
+            setUserProfile(refreshed);
+            setUserPoints(refreshed.points || 0);
+          }
+        } catch (err) {
+          console.warn('Badge check failed:', err);
+        }
       } else {
         setUserPoints(0);
+        setUserProfile(null);
         setFavorites([]);
         setFavMatchIds(new Set());
       }
@@ -126,6 +181,39 @@ export default function Home() {
       setViewedProfileData(data);
     } catch (e) {
       setViewedProfileData(null);
+    }
+  };
+
+  // Re-check badges after any action
+  const checkBadges = async () => {
+    if (!user) return;
+    try {
+      const profile = await getUserProfile(user.uid);
+      const publicData = await getPublicProfile(user.uid);
+      const unlockedNow = computeUnlockedBadges(profile, {
+        totalRatings: publicData.totalRatings,
+        totalComments: publicData.totalComments,
+        favoritesCount: publicData.favoritesCount,
+      });
+      const alreadyEarned = profile.earnedBadges || [];
+      const newlyEarned = unlockedNow.filter(id => !alreadyEarned.includes(id));
+      for (const badgeId of newlyEarned) {
+        const badge = BADGES.find(b => b.id === badgeId);
+        if (badge) {
+          await awardBadge(user.uid, badgeId, badge.bonus);
+          if (badgeId === newlyEarned[0]) {
+            setBadgeToast(badge);
+            setTimeout(() => setBadgeToast(null), 4500);
+          }
+        }
+      }
+      if (newlyEarned.length > 0) {
+        const refreshed = await getUserProfile(user.uid);
+        setUserProfile(refreshed);
+        setUserPoints(refreshed.points || 0);
+      }
+    } catch (err) {
+      console.warn('Badge recheck failed:', err);
     }
   };
   const [realMatches, setRealMatches] = useState({});
@@ -255,12 +343,14 @@ export default function Home() {
     if (!user) { setShowAuthModal(true); return; }
     if (!newComment.trim()) return;
     const replyData = replyTo ? { id: replyTo.id, user: replyTo.displayName || replyTo.user, text: replyTo.text } : null;
-    await sendMatchComment(user.uid, user.displayName, selectedMatch.id, newComment.trim(), replyData);
+    await sendMatchComment(user.uid, user.displayName, selectedMatch.id, newComment.trim(), replyData, userProfile?.favoriteClub || null);
     setNewComment('');
     setReplyTo(null);
     // Refresh comments
     const updated = await getMatchComments(selectedMatch.id);
     setComments(updated);
+    // Check badges
+    checkBadges();
   };
 
   const toggleReaction = async (commentId, emoji) => {
@@ -323,9 +413,12 @@ export default function Home() {
       setCommunityMatchAvg(newMatchAvg);
 
       // Calculate points based on proximity to average
+      let lynxHits = 0;
       for (const [playerId, rating] of Object.entries(playerRatings)) {
         const avg = newPlayerAvgs[playerId]?.average || 0;
-        totalPoints += calculatePoints(rating, avg);
+        const pts = calculatePoints(rating, avg);
+        totalPoints += pts;
+        if (pts === 50) lynxHits++; // Œil de Lynx = ±0.5
       }
       if (matchRating > 0) {
         totalPoints += calculatePoints(matchRating, newMatchAvg.average);
@@ -333,12 +426,20 @@ export default function Home() {
 
       // Save points
       await addUserPoints(user.uid, totalPoints, selectedMatch.id, user.displayName);
+      // Track lynx hits
+      for (let j = 0; j < lynxHits; j++) {
+        await incrementLynxCount(user.uid);
+      }
       setPointsEarned(totalPoints);
       setUserPoints(prev => prev + totalPoints);
 
       // Refresh user profile
       const profile = await getUserProfile(user.uid);
+      setUserProfile(profile);
       setUserPoints(profile.points || 0);
+
+      // Check badges after rating
+      checkBadges();
     } catch (e) {
       console.error('Error saving ratings:', e);
     }
@@ -349,7 +450,7 @@ export default function Home() {
 
   const goBack = () => {
     if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); setComments([]); }
-    else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); }
+    else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); setLeagueFilter(null); }
     else if (screen === 'leaderboard') { setScreen('home'); }
     else if (screen === 'favorites') { setScreen('home'); }
     else if (screen === 'globalchat') { setScreen('home'); }
@@ -373,6 +474,50 @@ export default function Home() {
   };
 
   // ══════════════════════════════════════
+  // REWARD TOASTS (badge unlock + daily streak)
+  // ══════════════════════════════════════
+  const rewardToasts = (
+    <>
+      {badgeToast && (
+        <div style={{
+          position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, maxWidth: 360, width: '90%',
+          background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+          borderRadius: 16, padding: '14px 18px',
+          boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+          display: 'flex', alignItems: 'center', gap: 12,
+          animation: 'slideDown 0.4s ease',
+          color: '#0a0e17',
+        }}>
+          <div style={{ fontSize: 36 }}>{badgeToast.icon}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 2, textTransform: 'uppercase', opacity: 0.7 }}>Badge débloqué !</div>
+            <div style={{ fontSize: 15, fontWeight: 900 }}>{badgeToast.name}</div>
+            <div style={{ fontSize: 11, opacity: 0.8 }}>{badgeToast.desc} · +{badgeToast.bonus} pts</div>
+          </div>
+        </div>
+      )}
+      {dailyStreakToast && !badgeToast && (
+        <div style={{
+          position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9998, maxWidth: 340, width: '90%',
+          background: t.card, border: `1px solid ${t.accent}44`,
+          borderRadius: 16, padding: '12px 16px',
+          boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+          display: 'flex', alignItems: 'center', gap: 12,
+          animation: 'slideDown 0.4s ease',
+        }}>
+          <div style={{ fontSize: 28 }}>🔥</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>Série de {dailyStreakToast.streak} jour{dailyStreakToast.streak > 1 ? 's' : ''} !</div>
+            <div style={{ fontSize: 11, color: t.textDim }}>Bonus quotidien · +{dailyStreakToast.bonus} pts</div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // ══════════════════════════════════════
   // LEGAL PAGES
   // ══════════════════════════════════════
   if (legalPage) {
@@ -384,7 +529,9 @@ export default function Home() {
   // ══════════════════════════════════════
   if (screen === 'home') {
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         <div style={{ padding: '40px 24px 16px', animation: 'fadeIn 0.6s ease' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -413,15 +560,56 @@ export default function Home() {
             <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
           </div>
         </div>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          padding: '12px 0', margin: '0 24px 20px',
-          background: 'rgba(231,76,60,0.08)', borderRadius: 12, border: '1px solid rgba(231,76,60,0.2)',
-        }}>
-          <PulsingDot /><span style={{ fontSize: 13, fontWeight: 600, color: t.live }}>
-            Note les joueurs, donne ton verdict
-          </span>
-        </div>
+        {/* Hero card — next favorite match or CTA */}
+        {(() => {
+          const nextFav = favorites.find(f => f.status === 'upcoming' || f.status === 'live');
+          if (nextFav) {
+            return (
+              <div style={{
+                margin: '0 24px 20px', padding: '18px 20px', borderRadius: 18,
+                background: `linear-gradient(135deg, ${t.accent}18, ${t.accent}08)`,
+                border: `1px solid ${t.accent}33`,
+                position: 'relative', overflow: 'hidden',
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: t.accent, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>
+                  {nextFav.status === 'live' ? '🔴 En direct' : '⭐ Prochain match favori'}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    {nextFav.homeLogo && <img src={nextFav.homeLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', marginBottom: 4 }} />}
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>{nextFav.home}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: 80 }}>
+                    <div style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{nextFav.time || 'vs'}</div>
+                    {nextFav.date && <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>{nextFav.date}</div>}
+                  </div>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    {nextFav.awayLogo && <img src={nextFav.awayLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', marginBottom: 4 }} />}
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>{nextFav.away}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div style={{
+              margin: '0 24px 20px', padding: '16px 20px', borderRadius: 16,
+              background: t.card, border: `1px solid ${t.border}`,
+              display: 'flex', alignItems: 'center', gap: 14,
+            }}>
+              <div style={{
+                width: 44, height: 44, borderRadius: 12,
+                background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 22, flexShrink: 0,
+              }}>🏟️</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 2 }}>Note les joueurs, donne ton verdict</div>
+                <div style={{ fontSize: 11, color: t.textDim }}>Ajoute tes matchs en favoris pour les retrouver ici</div>
+              </div>
+            </div>
+          );
+        })()}
         {/* User badge or login prompt */}
         <div style={{ margin: '0 24px 20px' }}>
           <UserBadge
@@ -455,11 +643,23 @@ export default function Home() {
                 }}>{(user.displayName || 'S')[0].toUpperCase()}</div>
                 <div style={{ fontSize: 20, fontWeight: 800 }}>{user.displayName || 'Siffleur'}</div>
                 <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{user.email}</div>
+                {userProfile?.favoriteClub && getClubById(userProfile.favoriteClub) && (
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10,
+                    padding: '4px 12px', borderRadius: 20,
+                    background: t.accentDim, border: `1px solid ${t.accent}33`,
+                  }}>
+                    {getClubById(userProfile.favoriteClub).crest && (
+                      <img src={getClubById(userProfile.favoriteClub).crest} alt="" style={{ width: 16, height: 16, objectFit: 'contain' }} />
+                    )}
+                    <span style={{ fontSize: 11, fontWeight: 700, color: t.accent }}>{getClubById(userProfile.favoriteClub).name}</span>
+                  </div>
+                )}
               </div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
                 {[
                   { label: 'Points', value: userPoints },
-                  { label: 'Matchs notés', value: '-' },
+                  { label: 'Matchs notés', value: userProfile?.matchesRated || 0 },
                   { label: 'Favoris', value: favorites.length },
                 ].map((s, i) => (
                   <div key={i} style={{
@@ -471,6 +671,72 @@ export default function Home() {
                   </div>
                 ))}
               </div>
+
+              {/* Level progress */}
+              {(() => {
+                const lvl = getLevelFromPoints(userPoints);
+                return (
+                  <div style={{
+                    padding: '12px 14px', borderRadius: 14, marginBottom: 14,
+                    background: t.accentDim, border: `1px solid ${t.accent}33`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 18 }}>{lvl.current.icon}</span>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: lvl.current.color }}>{lvl.current.name}</span>
+                      </div>
+                      {lvl.next && <span style={{ fontSize: 10, color: t.textDim }}>{lvl.pointsToNext} pts pour {lvl.next.name}</span>}
+                    </div>
+                    {lvl.next && (
+                      <div style={{ background: 'rgba(128,128,128,0.12)', borderRadius: 10, height: 6, overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${lvl.progress}%`, height: '100%',
+                          background: `linear-gradient(90deg, ${t.accent}, #00b0ff)`,
+                          transition: 'width 0.4s',
+                        }} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Badges */}
+              {userProfile?.earnedBadges?.length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase', color: t.textDim, marginBottom: 8 }}>
+                    Badges ({userProfile.earnedBadges.length}/{BADGES.length})
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {userProfile.earnedBadges.slice(0, 8).map(bid => {
+                      const b = BADGES.find(x => x.id === bid);
+                      if (!b) return null;
+                      return (
+                        <div key={bid} title={`${b.name} — ${b.desc}`} style={{
+                          width: 36, height: 36, borderRadius: 10,
+                          background: t.card, border: `1px solid ${t.accent}33`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+                        }}>{b.icon}</div>
+                      );
+                    })}
+                    {userProfile.earnedBadges.length > 8 && (
+                      <div style={{
+                        width: 36, height: 36, borderRadius: 10,
+                        background: t.toggleBg, border: `1px dashed ${t.border}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 11, fontWeight: 800, color: t.textDim,
+                      }}>+{userProfile.earnedBadges.length - 8}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <button onClick={() => { setShowProfile(false); setShowClubPicker(true); }} style={{
+                width: '100%', padding: '12px 0', borderRadius: 12, border: `1px solid ${t.border}`,
+                background: t.card, color: t.text, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}>
+                ⚽ {userProfile?.favoriteClub ? 'Changer de club favori' : 'Choisir un club favori'}
+              </button>
               <button onClick={() => { signOut(auth); setShowProfile(false); }} style={{
                 width: '100%', padding: '12px 0', borderRadius: 12, border: `1px solid ${t.border}`,
                 background: t.card, color: '#e74c3c', fontSize: 14, fontWeight: 700, cursor: 'pointer',
@@ -479,46 +745,153 @@ export default function Home() {
           </div>
         )}
 
+        {/* Club picker modal */}
+        {showClubPicker && user && (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 24, backdropFilter: 'blur(8px)',
+          }} onClick={() => setShowClubPicker(false)}>
+            <div style={{
+              background: t.gradient, borderRadius: 24, padding: 24, width: '100%', maxWidth: 400,
+              maxHeight: '85vh', overflowY: 'auto',
+              border: `1px solid ${t.border}`, boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                <div style={{ fontSize: 32, marginBottom: 6 }}>⚽</div>
+                <h2 style={{ fontSize: 18, fontWeight: 800 }}>Ton club favori</h2>
+                <p style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>
+                  Il sera affiché sur ton profil et à côté de ton nom
+                </p>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                {POPULAR_CLUBS.filter(c => c.id !== 'none').map(club => {
+                  const selected = userProfile?.favoriteClub === club.id;
+                  return (
+                    <button key={club.id} onClick={async () => {
+                      await updateFavoriteClub(user.uid, club.id);
+                      setUserProfile(prev => ({ ...(prev || {}), favoriteClub: club.id }));
+                      setShowClubPicker(false);
+                      checkBadges();
+                    }} style={{
+                      padding: '10px 8px', borderRadius: 12,
+                      background: selected ? t.accentDim : t.card,
+                      border: selected ? `2px solid ${t.accent}` : `1px solid ${t.border}`,
+                      cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                    }}>
+                      {club.crest ? (
+                        <img src={club.crest} alt={club.name} style={{ width: 28, height: 28, objectFit: 'contain' }} />
+                      ) : (
+                        <div style={{ fontSize: 20 }}>⚽</div>
+                      )}
+                      <span style={{ fontSize: 11, fontWeight: 700, color: t.text, textAlign: 'center' }}>{club.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <button onClick={async () => {
+                await updateFavoriteClub(user.uid, null);
+                setUserProfile(prev => ({ ...(prev || {}), favoriteClub: null }));
+                setShowClubPicker(false);
+              }} style={{
+                width: '100%', padding: '10px 0', borderRadius: 10,
+                background: 'transparent', border: `1px dashed ${t.border}`,
+                color: t.textDim, fontSize: 12, cursor: 'pointer', marginBottom: 8,
+              }}>Retirer mon club favori</button>
+              <button onClick={() => setShowClubPicker(false)} style={{
+                width: '100%', padding: '10px 0', borderRadius: 10,
+                background: 'transparent', border: 'none',
+                color: t.textDim, fontSize: 12, cursor: 'pointer',
+              }}>Annuler</button>
+            </div>
+          </div>
+        )}
+
         <div style={{ padding: '0 24px 100px' }}>
-          {/* TOP PERFORMANCES */}
-          {(topPlayers.length > 0 || topMatches.length > 0) && (
+          {/* WEEKLY QUESTS (only for logged in users) */}
+          {user && (
             <div style={{ marginBottom: 24 }}>
-              {topPlayers.length > 0 && (
-                <>
-                  <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>Top joueurs</h2>
-                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
-                    {topPlayers.map((p, i) => (
-                      <div key={i} style={{
-                        minWidth: 110, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
-                        background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
-                      }}>
-                        <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
-                        <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{p.average}</div>
-                        <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{p.count} votes</div>
-                      </div>
-                    ))}
+              <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>🎯 Quêtes de la semaine</h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {WEEKLY_QUESTS.map((q, i) => (
+                  <div key={q.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '12px 14px', borderRadius: 14,
+                    background: t.card, border: `1px solid ${t.border}`,
+                  }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: 10,
+                      background: t.accentDim, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 18, flexShrink: 0,
+                    }}>{q.icon}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{q.title}</div>
+                      <div style={{ fontSize: 11, color: t.accent, fontWeight: 600, marginTop: 2 }}>+{q.reward} pts à débloquer</div>
+                    </div>
+                    <div style={{
+                      padding: '4px 10px', borderRadius: 10, background: t.toggleBg,
+                      fontSize: 10, fontWeight: 800, color: t.textDim,
+                    }}>0/{q.target}</div>
                   </div>
-                </>
-              )}
-              {topMatches.length > 0 && (
-                <>
-                  <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>Top matchs</h2>
-                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
-                    {topMatches.map((m, i) => (
-                      <div key={i} style={{
-                        minWidth: 120, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
-                        background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
-                      }}>
-                        <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
-                        <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{m.average}</div>
-                        <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
+                ))}
+              </div>
             </div>
           )}
+
+          {/* TOP PERFORMANCES */}
+          <div style={{ marginBottom: 24 }}>
+            <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>🏆 Top joueurs</h2>
+            {topPlayers.length > 0 ? (
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
+                {topPlayers.map((p, i) => (
+                  <div key={i} style={{
+                    minWidth: 110, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                    background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{p.average}</div>
+                    <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{p.count} votes</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                padding: '20px 16px', marginBottom: 16, borderRadius: 14,
+                background: t.card, border: `1px dashed ${t.border}`, textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 6 }}>⚽</div>
+                <div style={{ fontSize: 12, color: t.textDim, lineHeight: 1.5 }}>
+                  Les meilleurs joueurs apparaîtront ici après le prochain match. Sois le premier à noter !
+                </div>
+              </div>
+            )}
+
+            <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>🔥 Top matchs</h2>
+            {topMatches.length > 0 ? (
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
+                {topMatches.map((m, i) => (
+                  <div key={i} style={{
+                    minWidth: 120, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                    background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{m.average}</div>
+                    <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                padding: '20px 16px', marginBottom: 16, borderRadius: 14,
+                background: t.card, border: `1px dashed ${t.border}`, textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 6 }}>🏟️</div>
+                <div style={{ fontSize: 12, color: t.textDim, lineHeight: 1.5 }}>
+                  Les matchs les mieux notés par la communauté s'afficheront ici.
+                </div>
+              </div>
+            )}
+          </div>
 
           <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 14 }}>Compétitions</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -568,6 +941,7 @@ export default function Home() {
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 
@@ -578,7 +952,9 @@ export default function Home() {
     const lb = realLeaderboard;
     const top3 = lb.length >= 3 ? [lb[1], lb[0], lb[2]] : [];
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         <div style={{ padding: '24px 24px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 style={{ fontSize: 24, fontWeight: 900 }}>🏅 Classement</h2>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
@@ -669,6 +1045,7 @@ export default function Home() {
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 
@@ -677,7 +1054,9 @@ export default function Home() {
   // ══════════════════════════════════════
   if (screen === 'favorites') {
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         <div style={{ padding: '24px 24px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 style={{ fontSize: 24, fontWeight: 900 }}>⭐ Favoris</h2>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
@@ -758,6 +1137,7 @@ export default function Home() {
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 
@@ -769,11 +1149,13 @@ export default function Home() {
       if (!user) { setShowAuthModal(true); return; }
       if (!globalNewMsg.trim()) return;
       const replyData = globalReplyTo ? { id: globalReplyTo.id, user: globalReplyTo.displayName, text: globalReplyTo.text } : null;
-      await sendGlobalMessage(user.uid, user.displayName, globalNewMsg.trim(), replyData);
+      await sendGlobalMessage(user.uid, user.displayName, globalNewMsg.trim(), replyData, userProfile?.favoriteClub || null);
+      await incrementChatCount(user.uid);
       setGlobalNewMsg('');
       setGlobalReplyTo(null);
       const updated = await getGlobalMessages(50);
       setGlobalMessages(updated);
+      checkBadges();
     };
 
     const toggleGlobalReaction = async (msgId, emoji) => {
@@ -799,7 +1181,9 @@ export default function Home() {
     };
 
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         <div style={{ padding: '24px 24px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 style={{ fontSize: 24, fontWeight: 900 }}>💬 Chat global</h2>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
@@ -856,8 +1240,13 @@ export default function Home() {
                   <span style={{ color: t.textDim, marginLeft: 6 }}>{msg.replyTo.text?.slice(0, 80)}{msg.replyTo.text?.length > 80 ? '...' : ''}</span>
                 </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span onClick={() => openUserProfile(msg.userId, msg.displayName)} style={{ fontSize: 13, fontWeight: 700, color: t.accent, cursor: 'pointer' }}>{msg.displayName}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
+                <div onClick={() => openUserProfile(msg.userId, msg.displayName)} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  {msg.favoriteClub && getClubById(msg.favoriteClub)?.crest && (
+                    <img src={getClubById(msg.favoriteClub).crest} alt="" style={{ width: 16, height: 16, objectFit: 'contain' }} />
+                  )}
+                  <span style={{ fontSize: 13, fontWeight: 700, color: t.accent }}>{msg.displayName}</span>
+                </div>
                 <span style={{ fontSize: 10, color: t.textDim }}>{timeAgo(msg.timestamp)}</span>
               </div>
               <p style={{ fontSize: 14, color: t.text, lineHeight: 1.5, marginBottom: 8 }}>{msg.text}</p>
@@ -890,6 +1279,7 @@ export default function Home() {
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 
@@ -899,7 +1289,9 @@ export default function Home() {
   if (screen === 'userprofile' && viewedProfile) {
     const p = viewedProfileData;
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         <div style={{ padding: '20px 24px 12px' }}>
           <button onClick={goBack} style={{
             background: t.toggleBg, border: `1px solid ${t.border}`, color: t.text,
@@ -915,7 +1307,19 @@ export default function Home() {
             fontSize: 32, fontWeight: 900, color: '#fff',
           }}>{(viewedProfile.displayName || '?')[0].toUpperCase()}</div>
           <div style={{ fontSize: 22, fontWeight: 800 }}>{viewedProfile.displayName || 'Siffleur'}</div>
-          {p && <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>Membre depuis {new Date(p.createdAt).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}</div>}
+          {p?.favoriteClub && getClubById(p.favoriteClub) && (
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8,
+              padding: '4px 12px', borderRadius: 20,
+              background: t.accentDim, border: `1px solid ${t.accent}33`,
+            }}>
+              {getClubById(p.favoriteClub).crest && (
+                <img src={getClubById(p.favoriteClub).crest} alt="" style={{ width: 16, height: 16, objectFit: 'contain' }} />
+              )}
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.accent }}>{getClubById(p.favoriteClub).name}</span>
+            </div>
+          )}
+          {p && <div style={{ fontSize: 12, color: t.textDim, marginTop: 8 }}>Membre depuis {new Date(p.createdAt).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}</div>}
         </div>
 
         {p ? (
@@ -939,17 +1343,57 @@ export default function Home() {
             </div>
 
             {/* Rank info */}
-            <div style={{
-              padding: '16px 20px', borderRadius: 16, marginBottom: 16,
-              background: t.accentDim, border: `1px solid ${t.accent}33`,
-              display: 'flex', alignItems: 'center', gap: 12,
-            }}>
-              <span style={{ fontSize: 28 }}>🏆</span>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>Siffleur niveau {Math.floor((p.points || 0) / 100) + 1}</div>
-                <div style={{ fontSize: 11, color: t.textDim }}>{p.points || 0} points au total</div>
+            {/* Level */}
+            {(() => {
+              const lvl = getLevelFromPoints(p.points || 0);
+              return (
+                <div style={{
+                  padding: '14px 18px', borderRadius: 16, marginBottom: 12,
+                  background: t.accentDim, border: `1px solid ${t.accent}33`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: lvl.next ? 10 : 0 }}>
+                    <span style={{ fontSize: 28 }}>{lvl.current.icon}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: lvl.current.color }}>{lvl.current.name}</div>
+                      <div style={{ fontSize: 11, color: t.textDim }}>{p.points || 0} points au total</div>
+                    </div>
+                  </div>
+                  {lvl.next && (
+                    <div style={{ background: 'rgba(128,128,128,0.12)', borderRadius: 10, height: 6, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${lvl.progress}%`, height: '100%',
+                        background: `linear-gradient(90deg, ${t.accent}, #00b0ff)`,
+                      }} />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Badges */}
+            {p.earnedBadges?.length > 0 && (
+              <div style={{
+                padding: '14px 18px', borderRadius: 16, marginBottom: 12,
+                background: t.card, border: `1px solid ${t.border}`,
+              }}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>
+                  Badges ({p.earnedBadges.length}/{BADGES.length})
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {p.earnedBadges.map(bid => {
+                    const b = BADGES.find(x => x.id === bid);
+                    if (!b) return null;
+                    return (
+                      <div key={bid} title={`${b.name} — ${b.desc}`} style={{
+                        width: 40, height: 40, borderRadius: 10,
+                        background: t.toggleBg, border: `1px solid ${t.accent}33`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20,
+                      }}>{b.icon}</div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Last active */}
             {p.lastActive && (
@@ -963,6 +1407,7 @@ export default function Home() {
         )}
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 
@@ -970,10 +1415,21 @@ export default function Home() {
   // LEAGUE SCREEN
   // ══════════════════════════════════════
   if (screen === 'league') {
-    const matches = realMatches[selectedLeague.id] || [];
-    const isLoading = loadingMatches && matches.length === 0;
+    const allMatches = realMatches[selectedLeague.id] || [];
+    const isLoading = loadingMatches && allMatches.length === 0;
+    const liveMatches = allMatches.filter(m => m.status === 'live');
+    const upcomingMatches = allMatches.filter(m => m.status === 'upcoming');
+    const finishedMatches = allMatches.filter(m => m.status === 'finished');
+
+    // Default filter: live > upcoming > finished
+    const defaultFilter = liveMatches.length > 0 ? 'live' : upcomingMatches.length > 0 ? 'upcoming' : 'finished';
+    const activeFilter = leagueFilter || defaultFilter;
+    const filteredMatches = activeFilter === 'live' ? liveMatches : activeFilter === 'upcoming' ? upcomingMatches : finishedMatches;
+
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '20px 24px', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <button onClick={goBack} style={{
@@ -986,6 +1442,31 @@ export default function Home() {
           </div>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
         </div>
+
+        {/* Filter tabs */}
+        {!isLoading && allMatches.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, padding: '0 24px 14px' }}>
+            {[
+              { id: 'live', label: 'En direct', count: liveMatches.length, emoji: '🔴' },
+              { id: 'upcoming', label: 'À venir', count: upcomingMatches.length, emoji: '📅' },
+              { id: 'finished', label: 'Terminés', count: finishedMatches.length, emoji: '🏁' },
+            ].map(f => (
+              <button key={f.id} onClick={() => setLeagueFilter(f.id)} disabled={f.count === 0} style={{
+                flex: 1, padding: '10px 8px', borderRadius: 12,
+                border: activeFilter === f.id ? `1px solid ${t.accent}44` : `1px solid ${t.border}`,
+                background: activeFilter === f.id ? t.accentDim : f.count === 0 ? 'transparent' : t.toggleBg,
+                color: f.count === 0 ? t.textDim : activeFilter === f.id ? t.accent : t.text,
+                fontSize: 11, fontWeight: 700, cursor: f.count === 0 ? 'not-allowed' : 'pointer',
+                opacity: f.count === 0 ? 0.4 : 1, transition: 'all 0.2s',
+              }}>
+                <div style={{ fontSize: 14, marginBottom: 2 }}>{f.emoji}</div>
+                <div>{f.label}</div>
+                <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>{f.count}</div>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={{ padding: '0 24px 100px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {isLoading && (
             <div style={{ textAlign: 'center', padding: '60px 20px', animation: 'fadeIn 0.3s ease' }}>
@@ -993,7 +1474,7 @@ export default function Home() {
               <div style={{ fontSize: 15, fontWeight: 600, color: t.textDim }}>Chargement des matchs...</div>
             </div>
           )}
-          {!isLoading && matches.length === 0 && (
+          {!isLoading && allMatches.length === 0 && (
             <div style={{
               textAlign: 'center', padding: '60px 20px',
               background: t.card, borderRadius: 20, border: `1px solid ${t.border}`,
@@ -1005,14 +1486,25 @@ export default function Home() {
               </div>
             </div>
           )}
-          {matches.map((match, i) => (
+          {!isLoading && allMatches.length > 0 && filteredMatches.length === 0 && (
+            <div style={{
+              textAlign: 'center', padding: '40px 20px',
+              background: t.card, borderRadius: 20, border: `1px solid ${t.border}`,
+            }}>
+              <div style={{ fontSize: 32, marginBottom: 12 }}>{activeFilter === 'live' ? '⏸️' : activeFilter === 'upcoming' ? '📅' : '🏁'}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: t.textDim }}>
+                {activeFilter === 'live' ? 'Pas de match en direct' : activeFilter === 'upcoming' ? 'Pas de prochains matchs' : 'Pas de matchs récents'}
+              </div>
+            </div>
+          )}
+          {filteredMatches.map((match, i) => (
             <div key={match.id}
               onClick={() => { setSelectedMatch(match); setScreen('match'); setSelectedTeamTab('home'); setBottomNav('home'); }}
               style={{
                 background: t.card, borderRadius: 18, padding: '18px 22px',
                 cursor: 'pointer', transition: 'all 0.2s ease',
                 border: match.status === 'live' ? '1px solid rgba(231,76,60,0.3)' : `1px solid ${t.border}`,
-                animation: `slideUp 0.4s ease ${i * 0.08}s both`,
+                animation: `slideUp 0.4s ease ${i * 0.06}s both`,
                 boxShadow: `0 2px 10px ${t.shadowColor}`,
               }}
             >
@@ -1061,6 +1553,7 @@ export default function Home() {
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 
@@ -1075,7 +1568,9 @@ export default function Home() {
     const totalPlayers = [...players.home, ...players.away].length;
 
     return (
-      <div style={baseStyle}>
+      <>
+        {rewardToasts}
+        <div style={baseStyle}>
         {/* Draft saved overlay (during live match) */}
         {draftSaved && (
           <div style={{
@@ -1401,12 +1896,19 @@ export default function Home() {
                         <span style={{ color: t.textDim, marginLeft: 6 }}>{c.replyTo.text?.slice(0, 60)}{c.replyTo.text?.length > 60 ? '...' : ''}</span>
                       </div>
                     )}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span onClick={() => c.userId && openUserProfile(c.userId, c.displayName)} style={{
-                        fontSize: 12, fontWeight: 700,
-                        color: (user && c.userId === user.uid) ? t.accent : t.text,
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
+                      <div onClick={() => c.userId && openUserProfile(c.userId, c.displayName)} style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
                         cursor: c.userId ? 'pointer' : 'default',
-                      }}>{c.displayName || c.user || 'Siffleur'}</span>
+                      }}>
+                        {c.favoriteClub && getClubById(c.favoriteClub)?.crest && (
+                          <img src={getClubById(c.favoriteClub).crest} alt="" style={{ width: 14, height: 14, objectFit: 'contain' }} />
+                        )}
+                        <span style={{
+                          fontSize: 12, fontWeight: 700,
+                          color: (user && c.userId === user.uid) ? t.accent : t.text,
+                        }}>{c.displayName || c.user || 'Siffleur'}</span>
+                      </div>
                       <span style={{ fontSize: 10, color: t.textDim }}>{timeAgo(c.timestamp) || c.time}</span>
                     </div>
                     <p style={{ fontSize: 13, color: isDark ? 'rgba(237,242,247,0.85)' : 'rgba(26,26,46,0.8)', lineHeight: 1.5, marginBottom: 8 }}>{c.text}</p>
@@ -1491,6 +1993,7 @@ export default function Home() {
         )}
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      </>
     );
   }
 

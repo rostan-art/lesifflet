@@ -169,6 +169,23 @@ export async function getUserProfile(userId) {
   return { points: 0, matchesRated: 0 };
 }
 
+// Update user's favorite club
+export async function updateFavoriteClub(userId, clubId) {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+  if (snap.exists()) {
+    await updateDoc(userRef, { favoriteClub: clubId });
+  } else {
+    await setDoc(userRef, {
+      favoriteClub: clubId,
+      points: 0,
+      matchesRated: 0,
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString(),
+    });
+  }
+}
+
 // Get leaderboard (top users by points)
 export async function getLeaderboard(limit = 20) {
   // For simplicity, fetch all and sort client-side
@@ -242,13 +259,14 @@ export async function isFavorited(userId, matchId) {
 
 // ── GLOBAL CHAT ──
 
-export async function sendGlobalMessage(userId, displayName, text, replyTo = null) {
+export async function sendGlobalMessage(userId, displayName, text, replyTo = null, favoriteClub = null) {
   const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const msgRef = doc(db, 'globalChat', msgId);
   await setDoc(msgRef, {
     id: msgId,
     userId,
     displayName: displayName || 'Siffleur',
+    favoriteClub: favoriteClub || null,
     text,
     replyTo: replyTo || null, // { id, user, text } of parent message
     reactions: {},
@@ -279,13 +297,14 @@ export async function reactToGlobalMessage(msgId, emoji, delta) {
 
 // ── MATCH COMMENTS (with replies) ──
 
-export async function sendMatchComment(userId, displayName, matchId, text, replyTo = null) {
+export async function sendMatchComment(userId, displayName, matchId, text, replyTo = null, favoriteClub = null) {
   const msgId = `cmt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const msgRef = doc(db, 'matchComments', msgId);
   await setDoc(msgRef, {
     id: msgId,
     userId,
     displayName: displayName || 'Siffleur',
+    favoriteClub: favoriteClub || null,
     matchId,
     text,
     replyTo: replyTo || null,
@@ -362,11 +381,86 @@ export async function getPublicProfile(userId) {
   // Count ratings
   const ratingsQ = query(collection(db, 'playerRatings'), where('userId', '==', userId));
   const ratingsSnap = await getDocs(ratingsQ);
-  
+  // Count favorites
+  const favQ = query(collection(db, 'favorites'), where('userId', '==', userId));
+  const favSnap = await getDocs(favQ);
+
   return {
     ...profile,
     id: userId,
     totalComments: commentSnap.size + globalSnap.size,
     totalRatings: ratingsSnap.size,
+    favoritesCount: favSnap.size,
   };
+}
+
+// ── BADGES & REWARDS ──
+
+// Record a new unlocked badge and grant bonus points
+export async function awardBadge(userId, badgeId, bonus) {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return false;
+
+  const data = snap.data();
+  const earnedBadges = data.earnedBadges || [];
+  if (earnedBadges.includes(badgeId)) return false; // already awarded
+
+  await updateDoc(userRef, {
+    earnedBadges: [...earnedBadges, badgeId],
+    points: (data.points || 0) + bonus,
+  });
+  return true;
+}
+
+// Track daily login for streak
+export async function updateDailyStreak(userId) {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return { streak: 0, bonus: 0, newDay: false };
+
+  const data = snap.data();
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10); // YYYY-MM-DD
+  const lastDay = data.lastStreakDay || '';
+
+  if (lastDay === today) {
+    return { streak: data.dayStreak || 0, bonus: 0, newDay: false };
+  }
+
+  // Check if yesterday
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+  let newStreak = lastDay === yesterdayStr ? (data.dayStreak || 0) + 1 : 1;
+  const bonus = Math.min(10 + (newStreak - 1) * 5, 100);
+
+  await updateDoc(userRef, {
+    dayStreak: newStreak,
+    lastStreakDay: today,
+    points: (data.points || 0) + bonus,
+  });
+
+  return { streak: newStreak, bonus, newDay: true };
+}
+
+// Increment lynx counter when user hits close-to-average rating
+export async function incrementLynxCount(userId) {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  await updateDoc(userRef, {
+    lynxCount: ((snap.data().lynxCount) || 0) + 1,
+  });
+}
+
+// Increment chat message counter
+export async function incrementChatCount(userId) {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  await updateDoc(userRef, {
+    chatMessages: ((snap.data().chatMessages) || 0) + 1,
+  });
 }

@@ -2,19 +2,19 @@ import '../styles/globals.css';
 import Script from 'next/script';
 
 export const metadata = {
-  title: 'LeSifflet — Le verdict des supporters',
+  title: 'LeSifflet — La voix des supporters',
   description: 'Note les joueurs, commente les matchs, compare ton verdict avec la communauté foot.',
   keywords: 'football, notation, joueurs, ligue 1, premier league, champions league, fans, communauté',
   manifest: '/manifest.json',
   openGraph: {
-    title: 'LeSifflet — Le verdict des supporters',
+    title: 'LeSifflet — La voix des supporters',
     description: 'Note les joueurs, commente les matchs, compare ton verdict avec des milliers de fans.',
     type: 'website',
     locale: 'fr_FR',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'LeSifflet — Le verdict des supporters',
+    title: 'LeSifflet — La voix des supporters',
     description: 'Note les joueurs, commente les matchs, compare ton verdict avec la communauté.',
   },
   viewport: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no',

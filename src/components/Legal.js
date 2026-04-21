@@ -8,7 +8,7 @@ export function LegalPage({ type, onClose, t }) {
       <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 20 }}>Mentions légales</h2>
       
       <Section title="Éditeur du site">
-        <P>LeSifflet — Le verdict des supporters</P>
+        <P>LeSifflet — La voix des supporters</P>
         <P>Site accessible à l'adresse : www.lesifflet.com</P>
         <P>Contact : contact@lesifflet.com</P>
       </Section>

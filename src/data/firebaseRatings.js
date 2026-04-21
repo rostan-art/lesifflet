@@ -169,6 +169,23 @@ export async function getUserProfile(userId) {
   return { points: 0, matchesRated: 0 };
 }
 
+// Update user's avatar (base64 data URL, compressed client-side)
+export async function updateUserAvatar(userId, photoData) {
+  const userRef = doc(db, 'users', userId);
+  const snap = await getDoc(userRef);
+  if (snap.exists()) {
+    await updateDoc(userRef, { photoURL: photoData });
+  } else {
+    await setDoc(userRef, {
+      photoURL: photoData,
+      points: 0,
+      matchesRated: 0,
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString(),
+    });
+  }
+}
+
 // Update user's favorite club
 export async function updateFavoriteClub(userId, clubId) {
   const userRef = doc(db, 'users', userId);

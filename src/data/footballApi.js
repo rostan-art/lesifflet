@@ -133,6 +133,7 @@ function formatMatch(match) {
     awayLogo: match.awayTeam?.crest || null,
     score: scoreDisplay,
     date: dateStr,
+    utcDate: match.utcDate,
     time: timeStr,
     status,
     minute,

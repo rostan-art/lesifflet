@@ -20,7 +20,7 @@ import {
   sendMatchComment, getMatchComments, reactToMatchComment,
   getTopPlayers, getTopMatches, getPublicProfile,
   updateFavoriteClub, awardBadge, updateDailyStreak,
-  incrementLynxCount, incrementChatCount,
+  incrementLynxCount, incrementChatCount, updateUserAvatar,
 } from '../data/firebaseRatings';
 
 export default function Home() {
@@ -184,7 +184,36 @@ export default function Home() {
     }
   };
 
-  // Re-check badges after any action
+  // Compress and upload avatar (resize to 200x200, JPEG quality 0.7 → ~10-30KB)
+  const handlePhotoUpload = async (file) => {
+    if (!user || !file) return;
+    try {
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        const img = new Image();
+        img.onload = async () => {
+          const canvas = document.createElement('canvas');
+          const size = 200;
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          // Crop to square (center crop)
+          const minDim = Math.min(img.width, img.height);
+          const sx = (img.width - minDim) / 2;
+          const sy = (img.height - minDim) / 2;
+          ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+          await updateUserAvatar(user.uid, dataUrl);
+          setUserProfile(prev => ({ ...(prev || {}), photoURL: dataUrl }));
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    } catch (e) {
+      console.warn('Photo upload failed:', e);
+    }
+  };
+
   const checkBadges = async () => {
     if (!user) return;
     try {
@@ -445,7 +474,56 @@ export default function Home() {
     }
 
     setShowConfirmation(true);
+    playWhistle();
     setTimeout(() => setShowConfirmation(false), 3000);
+  };
+
+  // Generate a referee whistle sound using Web Audio API (no file needed)
+  const playWhistle = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      // Two-tone whistle: short blast, brief pause, longer blast
+      const playBlast = (start, duration) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const filter = ctx.createBiquadFilter();
+
+        // High pitch + slight vibrato for the whistle effect
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(2400, start);
+        osc.frequency.linearRampToValueAtTime(2600, start + 0.05);
+        osc.frequency.linearRampToValueAtTime(2400, start + duration);
+
+        // Bandpass filter to make it sound more like a whistle
+        filter.type = 'bandpass';
+        filter.frequency.value = 2500;
+        filter.Q.value = 8;
+
+        // Envelope: quick attack, sustained, quick release
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
+        gain.gain.setValueAtTime(0.18, start + duration - 0.05);
+        gain.gain.linearRampToValueAtTime(0, start + duration);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + duration);
+      };
+
+      playBlast(now, 0.18);
+      playBlast(now + 0.28, 0.45);
+
+      // Auto-cleanup after sound finishes
+      setTimeout(() => ctx.close(), 1200);
+    } catch (e) {
+      // Silent fail — audio not critical
+    }
   };
 
   const goBack = () => {
@@ -538,13 +616,14 @@ export default function Home() {
               {/* Profile avatar */}
               <div onClick={() => user ? setShowProfile(true) : setShowAuthModal(true)} style={{
                 width: 40, height: 40, borderRadius: '50%', cursor: 'pointer',
-                background: user ? `linear-gradient(135deg, ${t.accent}, #00b0ff)` : t.toggleBg,
+                background: user && userProfile?.photoURL ? `url(${userProfile.photoURL}) center/cover` : (user ? `linear-gradient(135deg, ${t.accent}, #00b0ff)` : t.toggleBg),
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 16, fontWeight: 800, color: user ? '#fff' : t.textDim,
                 border: `2px solid ${user ? t.accent + '44' : t.border}`,
-                transition: 'all 0.2s',
+                transition: 'all 0.2s', overflow: 'hidden',
               }}>
-                {user ? (user.displayName || 'S')[0].toUpperCase() : '👤'}
+                {user && !userProfile?.photoURL && (user.displayName || 'S')[0].toUpperCase()}
+                {!user && '👤'}
               </div>
               <div>
                 <h1 style={{
@@ -553,7 +632,7 @@ export default function Home() {
                   WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
                 }}>LeSifflet</h1>
                 <p style={{ color: t.textDim, fontSize: 11, fontWeight: 400, letterSpacing: 2, textTransform: 'uppercase', marginTop: 2 }}>
-                  Le verdict des supporters
+                  La voix des supporters
                 </p>
               </div>
             </div>
@@ -635,12 +714,26 @@ export default function Home() {
               border: `1px solid ${t.border}`, boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
             }} onClick={e => e.stopPropagation()}>
               <div style={{ textAlign: 'center', marginBottom: 20 }}>
-                <div style={{
-                  width: 64, height: 64, borderRadius: '50%', margin: '0 auto 12px',
-                  background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 28, fontWeight: 900, color: '#fff',
-                }}>{(user.displayName || 'S')[0].toUpperCase()}</div>
+                <label htmlFor="avatar-upload" style={{
+                  display: 'block', cursor: 'pointer', position: 'relative',
+                  width: 64, height: 64, margin: '0 auto 12px',
+                }}>
+                  <div style={{
+                    width: 64, height: 64, borderRadius: '50%',
+                    background: userProfile?.photoURL ? `url(${userProfile.photoURL}) center/cover` : `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 28, fontWeight: 900, color: '#fff', overflow: 'hidden',
+                  }}>{!userProfile?.photoURL && (user.displayName || 'S')[0].toUpperCase()}</div>
+                  <div style={{
+                    position: 'absolute', bottom: -2, right: -2,
+                    width: 24, height: 24, borderRadius: '50%',
+                    background: t.accent, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 11, color: '#0a0e17', border: `2px solid ${t.gradient.includes('#0a') ? '#0a0e17' : '#fff'}`,
+                  }}>📷</div>
+                  <input id="avatar-upload" type="file" accept="image/*" onChange={(e) => {
+                    if (e.target.files?.[0]) handlePhotoUpload(e.target.files[0]);
+                  }} style={{ display: 'none' }} />
+                </label>
                 <div style={{ fontSize: 20, fontWeight: 800 }}>{user.displayName || 'Siffleur'}</div>
                 <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{user.email}</div>
                 {userProfile?.favoriteClub && getClubById(userProfile.favoriteClub) && (
@@ -808,36 +901,6 @@ export default function Home() {
         )}
 
         <div style={{ padding: '0 24px 100px' }}>
-          {/* WEEKLY QUESTS (only for logged in users) */}
-          {user && (
-            <div style={{ marginBottom: 24 }}>
-              <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>🎯 Quêtes de la semaine</h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {WEEKLY_QUESTS.map((q, i) => (
-                  <div key={q.id} style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '12px 14px', borderRadius: 14,
-                    background: t.card, border: `1px solid ${t.border}`,
-                  }}>
-                    <div style={{
-                      width: 36, height: 36, borderRadius: 10,
-                      background: t.accentDim, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 18, flexShrink: 0,
-                    }}>{q.icon}</div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700 }}>{q.title}</div>
-                      <div style={{ fontSize: 11, color: t.accent, fontWeight: 600, marginTop: 2 }}>+{q.reward} pts à débloquer</div>
-                    </div>
-                    <div style={{
-                      padding: '4px 10px', borderRadius: 10, background: t.toggleBg,
-                      fontSize: 10, fontWeight: 800, color: t.textDim,
-                    }}>0/{q.target}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* TOP PERFORMANCES */}
           <div style={{ marginBottom: 24 }}>
             <h2 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>🏆 Top joueurs</h2>
@@ -959,6 +1022,36 @@ export default function Home() {
           <h2 style={{ fontSize: 24, fontWeight: 900 }}>🏅 Classement</h2>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
         </div>
+
+        {/* WEEKLY QUESTS */}
+        {user && (
+          <div style={{ padding: '0 24px 20px' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase', color: t.textDim, marginBottom: 10 }}>🎯 Quêtes de la semaine</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {WEEKLY_QUESTS.map((q) => (
+                <div key={q.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '12px 14px', borderRadius: 14,
+                  background: t.card, border: `1px solid ${t.border}`,
+                }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: 10,
+                    background: t.accentDim, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 18, flexShrink: 0,
+                  }}>{q.icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{q.title}</div>
+                    <div style={{ fontSize: 11, color: t.accent, fontWeight: 600, marginTop: 2 }}>+{q.reward} pts à débloquer</div>
+                  </div>
+                  <div style={{
+                    padding: '4px 10px', borderRadius: 10, background: t.toggleBg,
+                    fontSize: 10, fontWeight: 800, color: t.textDim,
+                  }}>0/{q.target}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {lb.length === 0 && (
           <div style={{ textAlign: 'center', padding: '60px 24px' }}>
@@ -1099,20 +1192,27 @@ export default function Home() {
               }}>
                 {/* Remove favorite button */}
                 <button onClick={() => handleToggleFavorite({ id: fav.matchId, ...fav })} style={{
-                  position: 'absolute', top: 10, right: 12,
-                  background: 'none', border: 'none', fontSize: 18, cursor: 'pointer',
-                  color: '#f1c40f', padding: 4,
+                  position: 'absolute', top: 8, right: 10,
+                  background: t.toggleBg, border: `1px solid ${t.border}`,
+                  width: 32, height: 32, borderRadius: '50%',
+                  fontSize: 16, cursor: 'pointer',
+                  color: '#f1c40f', padding: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  zIndex: 2,
                 }}>⭐</button>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, paddingRight: 40, alignItems: 'center', gap: 8 }}>
                   <span style={{
                     fontSize: 10, fontWeight: 700, letterSpacing: 1.5,
                     color: fav.status === 'live' ? t.live : fav.status === 'finished' ? t.accent : t.textDim,
-                    textTransform: 'uppercase',
+                    textTransform: 'uppercase', flexShrink: 0,
                   }}>
                     {fav.status === 'live' ? 'En direct' : fav.status === 'finished' ? 'Terminé' : 'À venir'}
                   </span>
-                  {fav.leagueName && <span style={{ fontSize: 10, color: t.textDim }}>{fav.leagueName}</span>}
+                  {fav.leagueName && <span style={{
+                    fontSize: 10, color: t.textDim,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                  }}>{fav.leagueName}</span>}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 30 }}>
                   <div style={{ flex: 1, textAlign: 'center' }}>
@@ -1302,10 +1402,10 @@ export default function Home() {
         <div style={{ textAlign: 'center', padding: '10px 24px 24px' }}>
           <div style={{
             width: 72, height: 72, borderRadius: '50%', margin: '0 auto 14px',
-            background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+            background: p?.photoURL ? `url(${p.photoURL}) center/cover` : `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 32, fontWeight: 900, color: '#fff',
-          }}>{(viewedProfile.displayName || '?')[0].toUpperCase()}</div>
+            fontSize: 32, fontWeight: 900, color: '#fff', overflow: 'hidden',
+          }}>{!p?.photoURL && (viewedProfile.displayName || '?')[0].toUpperCase()}</div>
           <div style={{ fontSize: 22, fontWeight: 800 }}>{viewedProfile.displayName || 'Siffleur'}</div>
           {p?.favoriteClub && getClubById(p.favoriteClub) && (
             <div style={{
@@ -1418,8 +1518,14 @@ export default function Home() {
     const allMatches = realMatches[selectedLeague.id] || [];
     const isLoading = loadingMatches && allMatches.length === 0;
     const liveMatches = allMatches.filter(m => m.status === 'live');
-    const upcomingMatches = allMatches.filter(m => m.status === 'upcoming');
-    const finishedMatches = allMatches.filter(m => m.status === 'finished');
+    // Upcoming: soonest first (ascending date)
+    const upcomingMatches = allMatches
+      .filter(m => m.status === 'upcoming')
+      .sort((a, b) => new Date(a.utcDate || 0) - new Date(b.utcDate || 0));
+    // Finished: most recent first (descending date)
+    const finishedMatches = allMatches
+      .filter(m => m.status === 'finished')
+      .sort((a, b) => new Date(b.utcDate || 0) - new Date(a.utcDate || 0));
 
     // Default filter: live > upcoming > finished
     const defaultFilter = liveMatches.length > 0 ? 'live' : upcomingMatches.length > 0 ? 'upcoming' : 'finished';

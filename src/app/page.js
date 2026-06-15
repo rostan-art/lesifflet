@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { themes } from '../data/themes';
 import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { getClubById, POPULAR_CLUBS } from '../data/clubs';
+import { Confetti, WorldCupBanner } from '../components/Festive';
 import { BADGES, LEVELS, getLevelFromPoints, computeUnlockedBadges, WEEKLY_QUESTS } from '../data/badges';
 import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
@@ -77,6 +78,10 @@ export default function Home() {
   // ── BADGE TOAST ──
   const [badgeToast, setBadgeToast] = useState(null); // { icon, name, bonus }
   const [dailyStreakToast, setDailyStreakToast] = useState(null); // { streak, bonus }
+
+  // ── FESTIVE / WORLD CUP ──
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [wcConfettiSeen, setWcConfettiSeen] = useState(false); // only burst once per session
 
   // ── FIREBASE RATING STATE ──
   const [communityPlayerAvgs, setCommunityPlayerAvgs] = useState({});
@@ -964,18 +969,44 @@ export default function Home() {
               const liveCount = cachedMatches ? cachedMatches.filter(m => m.status === 'live').length : 0;
               return (
                 <div key={league.id}
-                  onClick={() => { setSelectedLeague(league); setScreen('league'); setBottomNav('home'); }}
+                  onClick={() => {
+                    setSelectedLeague(league);
+                    setScreen('league');
+                    setBottomNav('home');
+                    // Festive confetti burst the first time World Cup is opened
+                    if (league.id === 'worldcup' && !wcConfettiSeen) {
+                      setShowConfetti(true);
+                      setWcConfettiSeen(true);
+                    }
+                  }}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 14,
-                    padding: '14px 18px', background: t.card, borderRadius: 14,
+                    padding: '14px 18px',
+                    background: league.id === 'worldcup'
+                      ? 'linear-gradient(135deg, rgba(241,196,15,0.12), rgba(255,107,53,0.06))'
+                      : t.card,
+                    borderRadius: 14,
                     cursor: 'pointer', transition: 'all 0.2s ease',
-                    border: `1px solid ${t.border}`, animation: `slideUp 0.4s ease ${i * 0.05}s both`,
-                    boxShadow: `0 2px 8px ${t.shadowColor}`,
+                    border: league.id === 'worldcup'
+                      ? '1px solid rgba(241,196,15,0.45)'
+                      : `1px solid ${t.border}`,
+                    animation: `slideUp 0.4s ease ${i * 0.05}s both`,
+                    boxShadow: league.id === 'worldcup'
+                      ? '0 4px 16px rgba(241,196,15,0.15)'
+                      : `0 2px 8px ${t.shadowColor}`,
                   }}
                 >
                   <span style={{ fontSize: 26 }}>{league.flag}</span>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>{league.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700 }}>{league.name}</div>
+                      {league.id === 'worldcup' && (
+                        <span style={{
+                          fontSize: 8, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase',
+                          color: '#1a1205', background: '#f1c40f', padding: '2px 6px', borderRadius: 6,
+                        }}>En ce moment</span>
+                      )}
+                    </div>
                     <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{matchCount !== null ? `${matchCount} match${matchCount > 1 ? 's' : ''}` : 'Voir les matchs'}</div>
                   </div>
                   {liveCount > 0 && (
@@ -1004,6 +1035,7 @@ export default function Home() {
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      {showConfetti && <Confetti onDone={() => setShowConfetti(false)} />}
       </>
     );
   }
@@ -1549,6 +1581,9 @@ export default function Home() {
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
         </div>
 
+        {/* Festive World Cup banner */}
+        {selectedLeague.id === 'worldcup' && <WorldCupBanner t={t} />}
+
         {/* Filter tabs */}
         {!isLoading && allMatches.length > 0 && (
           <div style={{ display: 'flex', gap: 6, padding: '0 24px 14px' }}>
@@ -1659,6 +1694,7 @@ export default function Home() {
         </div>
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
       </div>
+      {showConfetti && <Confetti onDone={() => setShowConfetti(false)} />}
       </>
     );
   }
@@ -1672,6 +1708,23 @@ export default function Home() {
     const currentPlayers = selectedTeamTab === 'home' ? players.home : players.away;
     const ratedCount = Object.keys(playerRatings).length;
     const totalPlayers = [...players.home, ...players.away].length;
+
+    // Man of the Match: highest community average across both teams (min 3 votes)
+    // Only relevant once the match is finished
+    let manOfMatch = null;
+    if (selectedMatch?.status === 'finished') {
+      const allPlayers = [...players.home, ...players.away];
+      let best = null;
+      for (const pl of allPlayers) {
+        const avg = communityPlayerAvgs[pl.id];
+        if (avg && avg.count >= 3) {
+          if (!best || avg.average > best.average) {
+            best = { ...pl, average: avg.average, count: avg.count };
+          }
+        }
+      }
+      manOfMatch = best;
+    }
 
     return (
       <>
@@ -1823,12 +1876,37 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              {!loadingLineups && currentPlayers.map((player, i) => (
+              {/* Man of the Match banner */}
+              {manOfMatch && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 12,
+                  padding: '14px 16px', marginBottom: 14, borderRadius: 14,
+                  background: 'linear-gradient(135deg, rgba(241,196,15,0.18), rgba(241,196,15,0.05))',
+                  border: '1px solid rgba(241,196,15,0.4)',
+                }}>
+                  <span style={{ fontSize: 30 }}>⭐</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase', color: '#f1c40f' }}>Homme du match</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, marginTop: 2 }}>{manOfMatch.name}</div>
+                    <div style={{ fontSize: 11, color: t.textDim }}>Élu par la communauté · {manOfMatch.count} votes</div>
+                  </div>
+                  <div style={{
+                    textAlign: 'center', padding: '6px 12px', borderRadius: 12,
+                    background: 'rgba(241,196,15,0.15)',
+                  }}>
+                    <div style={{ fontSize: 22, fontWeight: 900, color: '#f1c40f' }}>{manOfMatch.average}</div>
+                    <div style={{ fontSize: 9, color: t.textDim }}>moyenne</div>
+                  </div>
+                </div>
+              )}
+              {!loadingLineups && currentPlayers.map((player, i) => {
+                const isMotm = manOfMatch && player.id === manOfMatch.id;
+                return (
                 <div key={player.id} style={{
                   display: 'flex', flexDirection: 'column', gap: 8,
                   padding: '12px 14px', marginBottom: 6, borderRadius: 14,
-                  background: playerRatings[player.id] ? t.accentDim : t.card,
-                  border: `1px solid ${playerRatings[player.id] ? t.accent + '33' : t.border}`,
+                  background: isMotm ? 'rgba(241,196,15,0.1)' : (playerRatings[player.id] ? t.accentDim : t.card),
+                  border: `1px solid ${isMotm ? 'rgba(241,196,15,0.45)' : (playerRatings[player.id] ? t.accent + '33' : t.border)}`,
                   animation: `slideUp 0.3s ease ${i * 0.03}s both`,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1836,6 +1914,7 @@ export default function Home() {
                       <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'rgba(128,128,128,0.12)', color: t.textDim, letterSpacing: 1 }}>{player.pos}</span>
                       {player.number && <span style={{ fontSize: 10, fontWeight: 700, color: t.textDim }}>#{player.number}</span>}
                       <span style={{ fontSize: 14, fontWeight: 700 }}>{player.name}</span>
+                      {isMotm && <span style={{ fontSize: 15 }} title="Homme du match">⭐</span>}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       {playerRatings[player.id] && <span style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{playerRatings[player.id]}</span>}
@@ -1852,7 +1931,8 @@ export default function Home() {
                     <div style={{ fontSize: 11, color: t.textDim, fontStyle: 'italic' }}>🔒 Notation à partir de la mi-temps</div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </>
           )}
 

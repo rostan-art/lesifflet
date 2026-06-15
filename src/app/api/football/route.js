@@ -18,12 +18,18 @@ export async function GET(request) {
 
   const apiUrl = `https://api.football-data.org/v4/${path}`;
 
+  // Path-aware caching (Free + Deep Data plan: 30 calls/min)
+  // - Match listings & scores: short cache (75s) so live scores stay fresh
+  // - Team squads & static data: long cache (1h) since they rarely change
+  const isMatchData = path.includes('/matches');
+  const revalidate = isMatchData ? 75 : 3600;
+
   try {
     const response = await fetch(apiUrl, {
       headers: {
         'X-Auth-Token': API_KEY,
       },
-      next: { revalidate: 300 }, // Cache 5 min
+      next: { revalidate },
     });
 
     const data = await response.json();
@@ -38,7 +44,7 @@ export async function GET(request) {
 
     return Response.json(data, {
       headers: {
-        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+        'Cache-Control': `public, s-maxage=${revalidate}, stale-while-revalidate=${revalidate * 2}`,
       },
     });
   } catch (error) {

@@ -1,8 +1,9 @@
 // football-data.org API integration (v4)
-// Free tier: 10 req/min, current season, top competitions
+// Free + Deep Data tier: 30 req/min, line-ups, scorers, cards
 
 // Competition codes for football-data.org
 export const LEAGUES = [
+  { id: "worldcup", code: "WC", name: "Coupe du Monde", flag: "🌍" },
   { id: "ligue1", code: "FL1", name: "Ligue 1", flag: "🇫🇷" },
   { id: "premierleague", code: "PL", name: "Premier League", flag: "🇬🇧" },
   { id: "laliga", code: "PD", name: "La Liga", flag: "🇪🇸" },

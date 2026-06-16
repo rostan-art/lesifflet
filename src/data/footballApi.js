@@ -52,11 +52,69 @@ export async function getMatchesByLeague(leagueCode) {
   }
 }
 
-// Get squads for both teams in a match
-// Free plan doesn't include lineups, so we fetch full team squads instead
+// Get the real match lineup (Deep Data plan: line-ups, bench & substitutions)
+// Returns only players who actually played: starters + subs who came on.
+// Falls back to full team squads if lineups aren't published yet.
 export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
   try {
-    // Fetch both team squads in parallel
+    // First, try the match detail endpoint which includes lineups on Deep Data
+    const matchData = await apiFetch(`matches/${matchId}`);
+
+    const hasLineups =
+      matchData &&
+      ((matchData.homeTeam?.lineup && matchData.homeTeam.lineup.length > 0) ||
+        (matchData.awayTeam?.lineup && matchData.awayTeam.lineup.length > 0));
+
+    if (hasLineups) {
+      // Build set of player IDs who entered via substitution (playerIn)
+      const subsInIds = new Set();
+      const subsByTeam = { home: [], away: [] };
+      const allSubs = matchData.substitutions || [];
+      allSubs.forEach(s => {
+        const inId = s.playerIn?.id;
+        if (inId) subsInIds.add(inId);
+      });
+
+      const posOrder = { 'GK': 0, 'DEF': 1, 'MIL': 2, 'ATT': 3 };
+
+      const formatLineup = (teamObj) => {
+        if (!teamObj) return null;
+        const starters = teamObj.lineup || [];
+        const bench = teamObj.bench || [];
+
+        // Players who played = all starters + bench players who came on
+        const playedBench = bench.filter(p => subsInIds.has(p.id));
+        const played = [...starters, ...playedBench];
+
+        const players = played
+          .filter(p => p.name)
+          .map(p => ({
+            id: `p_${p.id}`,
+            playerId: p.id,
+            name: p.name,
+            number: p.shirtNumber || null,
+            pos: mapPosition(p.position),
+            isSub: subsInIds.has(p.id), // entered as substitute
+          }))
+          .sort((a, b) => (posOrder[a.pos] || 9) - (posOrder[b.pos] || 9));
+
+        return {
+          teamName: teamObj.shortName || teamObj.name,
+          teamId: teamObj.id,
+          teamLogo: teamObj.crest,
+          formation: teamObj.formation || null,
+          starters: players,
+          hasRealLineup: true,
+        };
+      };
+
+      return {
+        home: formatLineup(matchData.homeTeam),
+        away: formatLineup(matchData.awayTeam),
+      };
+    }
+
+    // Fallback: fetch full team squads (lineups not published yet)
     const [homeData, awayData] = await Promise.all([
       homeTeamId ? apiFetch(`teams/${homeTeamId}`) : null,
       awayTeamId ? apiFetch(`teams/${awayTeamId}`) : null,
@@ -66,17 +124,16 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
 
     const formatSquad = (teamData) => {
       if (!teamData || !teamData.squad) return null;
-      
-      // Sort: GK first, then DEF, MIL, ATT
       const posOrder = { 'GK': 0, 'DEF': 1, 'MIL': 2, 'ATT': 3 };
       const players = teamData.squad
-        .filter(p => p.name) // Filter out empty entries
+        .filter(p => p.name)
         .map(p => ({
           id: `p_${p.id}`,
           playerId: p.id,
           name: p.name,
           number: p.shirtNumber || null,
           pos: mapPosition(p.position),
+          isSub: false,
         }))
         .sort((a, b) => (posOrder[a.pos] || 9) - (posOrder[b.pos] || 9));
 
@@ -86,6 +143,7 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
         teamLogo: teamData.crest,
         formation: null,
         starters: players,
+        hasRealLineup: false,
       };
     };
 
@@ -94,7 +152,7 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
       away: formatSquad(awayData),
     };
   } catch (error) {
-    console.error(`Failed to fetch squads for match ${matchId}:`, error);
+    console.error(`Failed to fetch lineups for match ${matchId}:`, error);
     return null;
   }
 }

@@ -125,6 +125,39 @@ export async function getMatchAverage(matchId) {
   return { average: 0, count: 0 };
 }
 
+// ── MATCH VIEWS ──
+
+// Increment total view count for a match (every open counts)
+export async function incrementMatchViews(matchId) {
+  const ref = doc(db, 'matchViews', matchId);
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    await updateDoc(ref, { views: (snap.data().views || 0) + 1 });
+  } else {
+    await setDoc(ref, { matchId, views: 1 });
+  }
+}
+
+// Get view counts for a set of matches → returns { matchId: views }
+export async function getMatchViews(matchIds) {
+  const result = {};
+  await Promise.all((matchIds || []).map(async (id) => {
+    try {
+      const snap = await getDoc(doc(db, 'matchViews', id));
+      if (snap.exists()) result[id] = snap.data().views || 0;
+    } catch (e) { /* ignore */ }
+  }));
+  return result;
+}
+
+// Get a user's own rating for a match (0 if not rated)
+export async function getUserMatchRating(userId, matchId) {
+  const ratingRef = doc(db, 'matchRatings', `${matchId}_${userId}`);
+  const snap = await getDoc(ratingRef);
+  if (snap.exists()) return snap.data().rating || 0;
+  return 0;
+}
+
 // ── USER POINTS ──
 
 // Calculate points earned based on proximity to average

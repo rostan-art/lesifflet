@@ -13,7 +13,7 @@ import { AuthModal, UserBadge } from '../components/Auth';
 import { auth } from '../data/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
-  savePlayerRating, saveMatchRating, getUserRatings,
+  savePlayerRating, saveMatchRating, getUserRatings, getUserMatchRating,
   getPlayerAverages, getMatchAverage, getUserProfile,
   addUserPoints, calculatePoints, getLeaderboard,
   toggleFavorite, getUserFavorites,
@@ -22,6 +22,7 @@ import {
   getTopPlayers, getTopMatches, getPublicProfile,
   updateFavoriteClub, awardBadge, updateDailyStreak,
   incrementLynxCount, incrementChatCount, updateUserAvatar,
+  incrementMatchViews, getMatchViews,
 } from '../data/firebaseRatings';
 
 export default function Home() {
@@ -33,6 +34,10 @@ export default function Home() {
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [selectedTeamTab, setSelectedTeamTab] = useState('home');
   const [playerRatings, setPlayerRatings] = useState({});
+  const [lockedPlayers, setLockedPlayers] = useState(new Set()); // players already rated & locked by this user
+  const [matchRatingLocked, setMatchRatingLocked] = useState(false);
+  const [savingPlayer, setSavingPlayer] = useState(null); // playerId currently being saved
+  const [matchViews, setMatchViews] = useState({}); // { matchId: viewCount }
   const [matchRating, setMatchRating] = useState(0);
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
@@ -268,6 +273,10 @@ export default function Home() {
         const matches = await getMatchesByLeague(selectedLeague.code);
         if (!cancelled) {
           setRealMatches(prev => ({ ...prev, [selectedLeague.id]: matches }));
+          // Load view counts for these matches
+          getMatchViews(matches.map(m => m.id)).then(views => {
+            if (!cancelled) setMatchViews(prev => ({ ...prev, ...views }));
+          }).catch(() => {});
         }
       } catch (e) {
         console.warn(`Failed to fetch ${selectedLeague.name}:`, e);
@@ -319,7 +328,15 @@ export default function Home() {
     // Load user's existing ratings
     if (user) {
       getUserRatings(user.uid, selectedMatch.id).then(ratings => {
-        if (Object.keys(ratings).length > 0) setPlayerRatings(ratings);
+        if (Object.keys(ratings).length > 0) {
+          setPlayerRatings(ratings);
+          // Every already-saved player is locked
+          setLockedPlayers(new Set(Object.keys(ratings)));
+        }
+      }).catch(() => {});
+      // Check if user already rated the match itself
+      getUserMatchRating(user.uid, selectedMatch.id).then(r => {
+        if (r > 0) { setMatchRating(r); setMatchRatingLocked(true); }
       }).catch(() => {});
     }
   }, [selectedMatch, user]);
@@ -338,12 +355,8 @@ export default function Home() {
   // Can the user rate? Only after halftime (45') or if match is finished
   function canRate() {
     if (!selectedMatch) return false;
-    if (selectedMatch.status === 'finished') return true;
-    if (selectedMatch.status === 'live') {
-      const min = parseInt(selectedMatch.minute);
-      return !isNaN(min) && min >= 45;
-    }
-    return false;
+    // Verdicts are only given at the final whistle — a verdict on an unfinished match means nothing
+    return selectedMatch.status === 'finished';
   }
 
   // Is the match fully finished? (ratings can only be saved permanently when finished)
@@ -368,9 +381,72 @@ export default function Home() {
     }
   };
 
-  const ratePlayer = (pid, r) => {
+  const ratePlayer = async (pid, r) => {
     if (!user) { setShowAuthModal(true); return; }
+    if (lockedPlayers.has(pid)) return; // already locked, can't change
+    if (savingPlayer) return; // avoid double-submit
+
+    setSavingPlayer(pid);
     setPlayerRatings(prev => ({ ...prev, [pid]: r }));
+
+    try {
+      // Save this single player's rating permanently
+      await savePlayerRating(user.uid, selectedMatch.id, pid, r);
+
+      // Compute points vs current community average for this player
+      const avgs = await getPlayerAverages(selectedMatch.id);
+      setCommunityPlayerAvgs(avgs);
+      const avg = avgs[pid]?.average || 0;
+      const pts = calculatePoints(r, avg);
+      await addUserPoints(user.uid, pts, selectedMatch.id, user.displayName);
+      if (pts === 50) await incrementLynxCount(user.uid);
+
+      // Lock this player
+      setLockedPlayers(prev => new Set([...prev, pid]));
+
+      // Whistle + points feedback
+      playWhistle();
+      setPointsEarned(pts);
+      setShowConfirmation(true);
+      setTimeout(() => setShowConfirmation(false), 2000);
+
+      // Refresh user points + badges
+      const profile = await getUserProfile(user.uid);
+      setUserProfile(profile);
+      setUserPoints(profile.points || 0);
+      checkBadges();
+    } catch (e) {
+      console.error('Error saving player rating:', e);
+      // Roll back optimistic rating on failure
+      setPlayerRatings(prev => { const c = { ...prev }; delete c[pid]; return c; });
+    } finally {
+      setSavingPlayer(null);
+    }
+  };
+
+  // Rate the match itself (locks once submitted)
+  const rateMatchNow = async (r) => {
+    if (!user) { setShowAuthModal(true); return; }
+    if (matchRatingLocked) return;
+    setMatchRating(r);
+    try {
+      await saveMatchRating(user.uid, selectedMatch.id, r);
+      const matchAvg = await getMatchAverage(selectedMatch.id);
+      setCommunityMatchAvg(matchAvg);
+      const pts = calculatePoints(r, matchAvg.average);
+      await addUserPoints(user.uid, pts, selectedMatch.id, user.displayName);
+      setMatchRatingLocked(true);
+      playWhistle();
+      setPointsEarned(pts);
+      setShowConfirmation(true);
+      setTimeout(() => setShowConfirmation(false), 2000);
+      const profile = await getUserProfile(user.uid);
+      setUserProfile(profile);
+      setUserPoints(profile.points || 0);
+      checkBadges();
+    } catch (e) {
+      console.error('Error saving match rating:', e);
+    }
   };
 
   const submitComment = async () => {
@@ -532,7 +608,7 @@ export default function Home() {
   };
 
   const goBack = () => {
-    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); setComments([]); }
+    if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setLockedPlayers(new Set()); setMatchRatingLocked(false); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); setComments([]); }
     else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); setLeagueFilter(null); }
     else if (screen === 'leaderboard') { setScreen('home'); }
     else if (screen === 'favorites') { setScreen('home'); }
@@ -1640,7 +1716,14 @@ export default function Home() {
           )}
           {filteredMatches.map((match, i) => (
             <div key={match.id}
-              onClick={() => { setSelectedMatch(match); setScreen('match'); setSelectedTeamTab('home'); setBottomNav('home'); }}
+              onClick={() => {
+                setSelectedMatch(match);
+                setScreen('match');
+                setSelectedTeamTab('home');
+                setBottomNav('home');
+                incrementMatchViews(match.id).catch(() => {});
+                setMatchViews(prev => ({ ...prev, [match.id]: (prev[match.id] || 0) + 1 }));
+              }}
               style={{
                 background: t.card, borderRadius: 18, padding: '18px 22px',
                 cursor: 'pointer', transition: 'all 0.2s ease',
@@ -1660,6 +1743,11 @@ export default function Home() {
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {matchViews[match.id] > 0 && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: t.textDim }}>
+                      👁️ {matchViews[match.id] >= 1000 ? (matchViews[match.id] / 1000).toFixed(1) + 'k' : matchViews[match.id]}
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: t.textDim }}>{match.date}</span>
                   <button onClick={(e) => { e.stopPropagation(); handleToggleFavorite({ ...match, leagueName: selectedLeague?.name || '' }); }} style={{
                     background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', padding: '2px 4px',
@@ -1790,6 +1878,11 @@ export default function Home() {
             <span style={{ fontSize: 28, fontWeight: 900, padding: '3px 14px', borderRadius: 10, background: t.toggleBg }}>{selectedMatch.score}</span>
             <span style={{ fontSize: 20, fontWeight: 800 }}>{selectedMatch.away}</span>
           </div>
+          {matchViews[selectedMatch.id] > 0 && (
+            <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11, color: t.textDim }}>
+              👁️ {matchViews[selectedMatch.id] >= 1000 ? (matchViews[selectedMatch.id] / 1000).toFixed(1) + 'k' : matchViews[selectedMatch.id]} vue{matchViews[selectedMatch.id] > 1 ? 's' : ''}
+            </div>
+          )}
         </div>
         {/* Draft mode banner */}
         {isDraftMode() && (
@@ -1865,13 +1958,13 @@ export default function Home() {
                   padding: '12px 16px', marginBottom: 14, borderRadius: 12,
                   background: 'rgba(241,196,15,0.1)', border: '1px solid rgba(241,196,15,0.25)',
                 }}>
-                  <span style={{ fontSize: 20 }}>🔒</span>
+                  <span style={{ fontSize: 20 }}>🔇</span>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f1c40f' }}>Notation verrouillée</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#f1c40f' }}>Notes ouvertes au coup de sifflet final</div>
                     <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>
                       {selectedMatch.status === 'upcoming'
-                        ? 'Tu pourras noter les joueurs à partir de la mi-temps.'
-                        : 'Les notes ouvrent à la mi-temps (45\') pour garantir des verdicts crédibles.'}
+                        ? 'Reviens après le match pour donner ton verdict. En attendant, commente et réagis en direct !'
+                        : 'Le match est en cours. Note les joueurs dès le coup de sifflet final — en attendant, commente l\'action !'}
                     </div>
                   </div>
                 </div>
@@ -1901,23 +1994,41 @@ export default function Home() {
               )}
               {!loadingLineups && currentPlayers.map((player, i) => {
                 const isMotm = manOfMatch && player.id === manOfMatch.id;
+                const isLocked = lockedPlayers.has(player.id);
+                const myRating = playerRatings[player.id];
+                const avatarColors = ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#e67e22', '#1abc9c', '#f39c12'];
+                const avatarColor = avatarColors[(player.name?.charCodeAt(0) || 0) % avatarColors.length];
+                const initials = player.name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
                 return (
                 <div key={player.id} style={{
                   display: 'flex', flexDirection: 'column', gap: 8,
                   padding: '12px 14px', marginBottom: 6, borderRadius: 14,
-                  background: isMotm ? 'rgba(241,196,15,0.1)' : (playerRatings[player.id] ? t.accentDim : t.card),
-                  border: `1px solid ${isMotm ? 'rgba(241,196,15,0.45)' : (playerRatings[player.id] ? t.accent + '33' : t.border)}`,
+                  background: isMotm ? 'rgba(241,196,15,0.1)' : (myRating ? t.accentDim : t.card),
+                  border: `1px solid ${isMotm ? 'rgba(241,196,15,0.45)' : (myRating ? t.accent + '33' : t.border)}`,
                   animation: `slideUp 0.3s ease ${i * 0.03}s both`,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'rgba(128,128,128,0.12)', color: t.textDim, letterSpacing: 1 }}>{player.pos}</span>
-                      {player.number && <span style={{ fontSize: 10, fontWeight: 700, color: t.textDim }}>#{player.number}</span>}
-                      <span style={{ fontSize: 14, fontWeight: 700 }}>{player.name}</span>
-                      {isMotm && <span style={{ fontSize: 15 }} title="Homme du match">⭐</span>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{
+                        width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                        background: `linear-gradient(135deg, ${avatarColor}, ${avatarColor}bb)`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 12, fontWeight: 800, color: '#fff',
+                      }}>{initials}</div>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 14, fontWeight: 700 }}>{player.name}</span>
+                          {isMotm && <span style={{ fontSize: 14 }} title="Homme du match">⭐</span>}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                          <span style={{ fontSize: 8, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: 'rgba(128,128,128,0.12)', color: t.textDim, letterSpacing: 1 }}>{player.pos}</span>
+                          {player.number && <span style={{ fontSize: 10, fontWeight: 700, color: t.textDim }}>#{player.number}</span>}
+                          {player.isSub && <span style={{ fontSize: 8, fontWeight: 700, color: t.accent }}>↑ entré en jeu</span>}
+                        </div>
+                      </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {playerRatings[player.id] && <span style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{playerRatings[player.id]}</span>}
+                      {myRating && <span style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{myRating}</span>}
                       {communityPlayerAvgs[player.id] && (
                         <span style={{ fontSize: 11, color: t.textDim }}>
                           moy. {communityPlayerAvgs[player.id].average} ({communityPlayerAvgs[player.id].count})
@@ -1926,9 +2037,18 @@ export default function Home() {
                     </div>
                   </div>
                   {canRate() ? (
-                    <StarRating value={playerRatings[player.id] || 0} onChange={r => ratePlayer(player.id, r)} size={22} />
+                    isLocked ? (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        fontSize: 11, color: t.accent, fontWeight: 600,
+                      }}>
+                        🔒 Note enregistrée — verdict définitif
+                      </div>
+                    ) : (
+                      <StarRating value={myRating || 0} onChange={r => ratePlayer(player.id, r)} size={22} />
+                    )
                   ) : (
-                    <div style={{ fontSize: 11, color: t.textDim, fontStyle: 'italic' }}>🔒 Notation à partir de la mi-temps</div>
+                    <div style={{ fontSize: 11, color: t.textDim, fontStyle: 'italic' }}>🔇 Notes ouvertes au coup de sifflet final</div>
                   )}
                 </div>
                 );
@@ -1942,20 +2062,27 @@ export default function Home() {
               <div style={{ background: t.card, borderRadius: 18, padding: 22, border: `1px solid ${t.border}`, textAlign: 'center', boxShadow: `0 2px 10px ${t.shadowColor}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: t.textDim, textTransform: 'uppercase', letterSpacing: 2, marginBottom: 18 }}>Note ce match</div>
                 {canRate() ? (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
-                      <StarRating value={matchRating} onChange={setMatchRating} size={30} />
+                  matchRatingLocked ? (
+                    <div style={{ padding: '8px 0' }}>
+                      <div style={{ fontSize: 44, fontWeight: 900, color: t.accent }}>{matchRating}<span style={{ fontSize: 18, color: t.textDim }}>/10</span></div>
+                      <div style={{ fontSize: 11, color: t.accent, fontWeight: 600, marginTop: 6 }}>🔒 Verdict enregistré — définitif</div>
                     </div>
-                    {matchRating > 0 && <div style={{ fontSize: 44, fontWeight: 900, color: t.accent }}>{matchRating}<span style={{ fontSize: 18, color: t.textDim }}>/10</span></div>}
-                  </>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
+                        <StarRating value={matchRating} onChange={rateMatchNow} size={30} />
+                      </div>
+                      {matchRating > 0 && <div style={{ fontSize: 44, fontWeight: 900, color: t.accent }}>{matchRating}<span style={{ fontSize: 18, color: t.textDim }}>/10</span></div>}
+                    </>
+                  )
                 ) : (
                   <div style={{ padding: '16px 0' }}>
-                    <div style={{ fontSize: 32, marginBottom: 10 }}>🔒</div>
-                    <div style={{ fontSize: 13, color: '#f1c40f', fontWeight: 700, marginBottom: 4 }}>Notation verrouillée</div>
+                    <div style={{ fontSize: 32, marginBottom: 10 }}>🔇</div>
+                    <div style={{ fontSize: 13, color: '#f1c40f', fontWeight: 700, marginBottom: 4 }}>Notes ouvertes au coup de sifflet final</div>
                     <div style={{ fontSize: 12, color: t.textDim }}>
                       {selectedMatch.status === 'upcoming'
-                        ? 'Tu pourras noter après la mi-temps du match.'
-                        : 'La notation ouvre à la 45e minute.'}
+                        ? 'Reviens après le match pour donner ton verdict.'
+                        : 'Le match est en cours — patiente jusqu\'au coup de sifflet final.'}
                     </div>
                   </div>
                 )}
@@ -2154,27 +2281,16 @@ export default function Home() {
             </div>
           )}
         </div>
-        {(ratedCount > 0 || matchRating > 0) && (
+        {canRate() && lockedPlayers.size > 0 && (
           <div style={{ position: 'fixed', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 'calc(100% - 48px)', maxWidth: 432, zIndex: 50 }}>
-            <button onClick={submitAllRatings} style={{
-              width: '100%', padding: '14px 0', borderRadius: 14, border: 'none',
-              background: isDraftMode()
-                ? 'linear-gradient(135deg, #f39c12, #f1c40f)'
-                : `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
-              color: '#0a0e17', fontSize: 15, fontWeight: 800, cursor: 'pointer',
-              boxShadow: isDraftMode() ? '0 8px 32px rgba(241,196,15,0.3)' : `0 8px 32px ${t.accent}44`,
-              letterSpacing: 0.5,
+            <div style={{
+              width: '100%', padding: '12px 0', borderRadius: 14,
+              background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+              color: '#0a0e17', fontSize: 14, fontWeight: 800, textAlign: 'center',
+              boxShadow: `0 8px 32px ${t.accent}44`,
             }}>
-              {isDraftMode()
-                ? `📝 Sauvegarder brouillon (${ratedCount} joueur${ratedCount > 1 ? 's' : ''}${matchRating > 0 ? ' + match' : ''})`
-                : `🏁 Valider mon verdict (${ratedCount} joueur${ratedCount > 1 ? 's' : ''}${matchRating > 0 ? ' + match' : ''})`
-              }
-            </button>
-            {isDraftMode() && (
-              <div style={{ textAlign: 'center', marginTop: 6, fontSize: 10, color: t.textDim }}>
-                Verdict validé définitivement au coup de sifflet final
-              </div>
-            )}
+              ✅ {lockedPlayers.size} verdict{lockedPlayers.size > 1 ? 's' : ''} enregistré{lockedPlayers.size > 1 ? 's' : ''}{matchRatingLocked ? ' + match' : ''}
+            </div>
           </div>
         )}
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />

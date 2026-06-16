@@ -7,7 +7,7 @@ import {
 // ── PLAYER RATINGS ──
 
 // Save a user's rating for a player in a match
-export async function savePlayerRating(userId, matchId, playerId, rating) {
+export async function savePlayerRating(userId, matchId, playerId, rating, playerMeta = null) {
   const ratingRef = doc(db, 'playerRatings', `${matchId}_${playerId}_${userId}`);
   await setDoc(ratingRef, {
     userId,
@@ -18,11 +18,11 @@ export async function savePlayerRating(userId, matchId, playerId, rating) {
   });
 
   // Update the aggregate (average + count)
-  await updatePlayerAverage(matchId, playerId);
+  await updatePlayerAverage(matchId, playerId, playerMeta);
 }
 
 // Calculate and store the average for a player in a match
-async function updatePlayerAverage(matchId, playerId) {
+async function updatePlayerAverage(matchId, playerId, playerMeta = null) {
   const q = query(
     collection(db, 'playerRatings'),
     where('matchId', '==', matchId),
@@ -39,13 +39,23 @@ async function updatePlayerAverage(matchId, playerId) {
 
   const avg = count > 0 ? (total / count) : 0;
   const avgRef = doc(db, 'playerAverages', `${matchId}_${playerId}`);
-  await setDoc(avgRef, {
+  const safe = (v, f = '') => (v === undefined || v === null ? f : v);
+  const base = {
     matchId,
     playerId,
     average: Math.round(avg * 10) / 10,
     count,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  if (playerMeta) {
+    base.playerName = safe(playerMeta.playerName);
+    base.home = safe(playerMeta.home);
+    base.away = safe(playerMeta.away);
+    base.homeLogo = safe(playerMeta.homeLogo);
+    base.awayLogo = safe(playerMeta.awayLogo);
+    base.score = safe(playerMeta.score);
+  }
+  await setDoc(avgRef, base, { merge: true });
 }
 
 // Get all player averages for a match
@@ -81,7 +91,7 @@ export async function getUserRatings(userId, matchId) {
 
 // ── MATCH RATINGS ──
 
-export async function saveMatchRating(userId, matchId, rating) {
+export async function saveMatchRating(userId, matchId, rating, matchMeta = null) {
   const ratingRef = doc(db, 'matchRatings', `${matchId}_${userId}`);
   await setDoc(ratingRef, {
     userId,
@@ -89,10 +99,10 @@ export async function saveMatchRating(userId, matchId, rating) {
     rating,
     timestamp: new Date().toISOString(),
   });
-  await updateMatchAverage(matchId);
+  await updateMatchAverage(matchId, matchMeta);
 }
 
-async function updateMatchAverage(matchId) {
+async function updateMatchAverage(matchId, matchMeta = null) {
   const q = query(
     collection(db, 'matchRatings'),
     where('matchId', '==', matchId)
@@ -108,12 +118,30 @@ async function updateMatchAverage(matchId) {
 
   const avg = count > 0 ? (total / count) : 0;
   const avgRef = doc(db, 'matchAverages', matchId);
-  await setDoc(avgRef, {
+  const safe = (v, f = '') => (v === undefined || v === null ? f : v);
+  const base = {
     matchId,
     average: Math.round(avg * 10) / 10,
     count,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  // Store match metadata so Top Matches cards can be clickable
+  if (matchMeta) {
+    base.home = safe(matchMeta.home);
+    base.away = safe(matchMeta.away);
+    base.homeLogo = safe(matchMeta.homeLogo);
+    base.awayLogo = safe(matchMeta.awayLogo);
+    base.score = safe(matchMeta.score);
+    base.status = safe(matchMeta.status);
+    base.date = safe(matchMeta.date);
+    base.utcDate = safe(matchMeta.utcDate);
+    base.time = safe(matchMeta.time);
+    base.homeId = safe(matchMeta.homeId);
+    base.awayId = safe(matchMeta.awayId);
+    base.fixtureId = safe(matchMeta.fixtureId);
+    base.leagueName = safe(matchMeta.leagueName);
+  }
+  await setDoc(avgRef, base, { merge: true });
 }
 
 export async function getMatchAverage(matchId) {

@@ -187,6 +187,37 @@ export default function Home() {
   }, [selectedMatch]);
 
   // View another user's profile
+  // Open a match screen from a match-like object (used by Top Matches carousels)
+  const openMatchFromCard = (m) => {
+    if (!m) return;
+    const matchObj = {
+      id: m.id || m.matchId,
+      fixtureId: m.fixtureId || '',
+      home: m.home, away: m.away,
+      homeId: m.homeId || '', awayId: m.awayId || '',
+      homeLogo: m.homeLogo || '', awayLogo: m.awayLogo || '',
+      score: m.score || '', date: m.date || '', utcDate: m.utcDate || '',
+      time: m.time || '', status: m.status || 'finished',
+      minute: m.minute || '', matchday: m.matchday || '', round: m.round || '',
+    };
+    if (!matchObj.id || !matchObj.home) return; // not enough data
+    setSelectedMatch(matchObj);
+    setScreen('match');
+    setSelectedTeamTab('home');
+    setBottomNav('home');
+    incrementMatchViews(matchObj.id).catch(() => {});
+    setMatchViews(prev => ({ ...prev, [matchObj.id]: (prev[matchObj.id] || 0) + 1 }));
+  };
+
+  // Open a league screen by its id (used by Top Scorers carousel)
+  const openLeagueById = (leagueId) => {
+    const league = LEAGUES.find(l => l.id === leagueId);
+    if (!league) return;
+    setSelectedLeague(league);
+    setScreen('league');
+    setBottomNav('home');
+  };
+
   const openUserProfile = async (userId, displayName) => {
     if (!userId) return;
     setViewedProfile({ id: userId, displayName });
@@ -412,8 +443,16 @@ export default function Home() {
     setPlayerRatings(prev => ({ ...prev, [pid]: r }));
 
     try {
-      // Save this single player's rating permanently
-      await savePlayerRating(user.uid, selectedMatch.id, pid, r);
+      // Find player name for metadata
+      const allP = [...(getPlayers().home || []), ...(getPlayers().away || [])];
+      const playerObj = allP.find(p => p.id === pid);
+      // Save this single player's rating permanently (with metadata for clickable top players)
+      await savePlayerRating(user.uid, selectedMatch.id, pid, r, {
+        playerName: playerObj?.name || '',
+        home: selectedMatch.home, away: selectedMatch.away,
+        homeLogo: selectedMatch.homeLogo, awayLogo: selectedMatch.awayLogo,
+        score: selectedMatch.score,
+      });
 
       // Compute points vs current community average for this player
       const avgs = await getPlayerAverages(selectedMatch.id);
@@ -452,7 +491,14 @@ export default function Home() {
     if (matchRatingLocked) return;
     setMatchRating(r);
     try {
-      await saveMatchRating(user.uid, selectedMatch.id, r);
+      await saveMatchRating(user.uid, selectedMatch.id, r, {
+        home: selectedMatch.home, away: selectedMatch.away,
+        homeLogo: selectedMatch.homeLogo, awayLogo: selectedMatch.awayLogo,
+        score: selectedMatch.score, status: selectedMatch.status,
+        date: selectedMatch.date, utcDate: selectedMatch.utcDate, time: selectedMatch.time,
+        homeId: selectedMatch.homeId, awayId: selectedMatch.awayId,
+        fixtureId: selectedMatch.fixtureId, leagueName: selectedLeague?.name || '',
+      });
       const matchAvg = await getMatchAverage(selectedMatch.id);
       setCommunityMatchAvg(matchAvg);
       const pts = calculatePoints(r, matchAvg.average);
@@ -1010,12 +1056,14 @@ export default function Home() {
             {topPlayers.length > 0 ? (
               <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
                 {topPlayers.map((p, i) => (
-                  <div key={i} style={{
+                  <div key={i} onClick={() => p.matchId && openMatchFromCard({ id: p.matchId, home: p.home, away: p.away, homeLogo: p.homeLogo, awayLogo: p.awayLogo, score: p.score, status: 'finished' })} style={{
                     minWidth: 110, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
                     background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
+                    cursor: p.matchId ? 'pointer' : 'default',
                   }}>
                     <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
-                    <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{p.average}</div>
+                    {p.playerName && <div style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.2, marginBottom: 4 }}>{p.playerName}</div>}
+                    <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{p.average} ⭐</div>
                     <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{p.count} votes</div>
                   </div>
                 ))}
@@ -1025,8 +1073,8 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Meilleurs buteurs · Coupe du Monde</div>
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
                   {wcScorers.map((s, i) => (
-                    <div key={i} style={{
-                      minWidth: 130, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                    <div key={i} onClick={() => openLeagueById('worldcup')} style={{
+                      minWidth: 130, padding: '14px 12px', borderRadius: 16, textAlign: 'center', cursor: 'pointer',
                       background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
                       border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
                     }}>
@@ -1055,13 +1103,34 @@ export default function Home() {
             {topMatches.length > 0 ? (
               <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }}>
                 {topMatches.map((m, i) => (
-                  <div key={i} style={{
-                    minWidth: 120, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                  <div key={i} onClick={() => openMatchFromCard(m)} style={{
+                    minWidth: m.home ? 150 : 120, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
                     background: i === 0 ? t.accentDim : t.card, border: `1px solid ${i === 0 ? t.accent + '33' : t.border}`,
+                    cursor: m.home ? 'pointer' : 'default',
                   }}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
-                    <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{m.average}</div>
-                    <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 6 }}>#{i + 1}</div>
+                    {m.home ? (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4, marginBottom: 6 }}>
+                          <div style={{ flex: 1, textAlign: 'center' }}>
+                            {m.homeLogo && <img src={m.homeLogo} alt="" style={{ width: 20, height: 20, objectFit: 'contain' }} />}
+                            <div style={{ fontSize: 10, fontWeight: 700, marginTop: 2 }}>{m.home}</div>
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 900 }}>{m.score}</div>
+                          <div style={{ flex: 1, textAlign: 'center' }}>
+                            {m.awayLogo && <img src={m.awayLogo} alt="" style={{ width: 20, height: 20, objectFit: 'contain' }} />}
+                            <div style={{ fontSize: 10, fontWeight: 700, marginTop: 2 }}>{m.away}</div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{m.average} ⭐</div>
+                        <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{m.average}</div>
+                        <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1070,8 +1139,8 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Matchs les plus spectaculaires · Coupe du Monde</div>
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
                   {wcSpectacular.map((m, i) => (
-                    <div key={i} style={{
-                      minWidth: 150, padding: '14px 12px', borderRadius: 16,
+                    <div key={i} onClick={() => openMatchFromCard(m)} style={{
+                      minWidth: 150, padding: '14px 12px', borderRadius: 16, cursor: 'pointer',
                       background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
                       border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
                     }}>

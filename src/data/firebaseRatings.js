@@ -259,21 +259,24 @@ export async function toggleFavorite(userId, match) {
     await deleteDoc(favRef);
     return false; // removed
   } else {
+    // Sanitize: Firestore rejects undefined values, so coerce everything to safe types
+    const safe = (v, fallback = '') => (v === undefined || v === null ? fallback : v);
     await setDoc(favRef, {
       userId,
-      matchId: match.id,
-      home: match.home,
-      away: match.away,
-      date: match.date || '',
-      time: match.time || '',
-      status: match.status || '',
-      score: match.score || '',
-      homeId: match.homeId || '',
-      awayId: match.awayId || '',
-      homeLogo: match.homeLogo || '',
-      awayLogo: match.awayLogo || '',
-      fixtureId: match.fixtureId || '',
-      leagueName: match.leagueName || '',
+      matchId: String(match.id),
+      home: safe(match.home),
+      away: safe(match.away),
+      date: safe(match.date),
+      utcDate: safe(match.utcDate),
+      time: safe(match.time),
+      status: safe(match.status),
+      score: safe(match.score),
+      homeId: safe(match.homeId),
+      awayId: safe(match.awayId),
+      homeLogo: safe(match.homeLogo),
+      awayLogo: safe(match.awayLogo),
+      fixtureId: safe(match.fixtureId),
+      leagueName: safe(match.leagueName),
       addedAt: new Date().toISOString(),
     });
     return true; // added

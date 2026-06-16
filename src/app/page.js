@@ -5,7 +5,7 @@ import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { getClubById, POPULAR_CLUBS } from '../data/clubs';
 import { Confetti, WorldCupBanner } from '../components/Festive';
 import { BADGES, LEVELS, getLevelFromPoints, computeUnlockedBadges, WEEKLY_QUESTS } from '../data/badges';
-import { LEAGUES, getMatchesByLeague, getMatchLineups } from '../data/footballApi';
+import { LEAGUES, getMatchesByLeague, getMatchLineups, getTopScorers, getSpectacularMatches } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { InstallBanner } from '../components/InstallBanner';
 import { LegalPage } from '../components/Legal';
@@ -73,6 +73,8 @@ export default function Home() {
   // ── TOP PERFORMANCES ──
   const [topPlayers, setTopPlayers] = useState([]);
   const [topMatches, setTopMatches] = useState([]);
+  const [wcScorers, setWcScorers] = useState([]); // World Cup top scorers (fallback)
+  const [wcSpectacular, setWcSpectacular] = useState([]); // World Cup most spectacular matches (fallback)
 
   // ── COMMENT REPLIES ──
   const [replyTo, setReplyTo] = useState(null); // { id, user, text } of comment being replied to
@@ -167,6 +169,9 @@ export default function Home() {
     if (screen !== 'home') return;
     getTopPlayers(5).then(setTopPlayers).catch(() => {});
     getTopMatches(5).then(setTopMatches).catch(() => {});
+    // World Cup real-data fallbacks (top scorers + most spectacular matches)
+    getTopScorers('WC', 5).then(setWcScorers).catch(() => {});
+    getSpectacularMatches('WC', 5).then(setWcSpectacular).catch(() => {});
   }, [screen]);
 
   // Load global chat messages
@@ -371,13 +376,30 @@ export default function Home() {
 
   const handleToggleFavorite = async (match) => {
     if (!user) { setShowAuthModal(true); return; }
-    const added = await toggleFavorite(user.uid, match);
-    if (added) {
-      setFavMatchIds(prev => new Set([...prev, match.id]));
-      setFavorites(prev => [...prev, match]);
-    } else {
+    const isCurrentlyFav = favMatchIds.has(match.id);
+
+    // Optimistic UI update — flip the star immediately
+    if (isCurrentlyFav) {
       setFavMatchIds(prev => { const s = new Set(prev); s.delete(match.id); return s; });
       setFavorites(prev => prev.filter(f => f.matchId !== match.id));
+    } else {
+      setFavMatchIds(prev => new Set([...prev, match.id]));
+      setFavorites(prev => [...prev, { ...match, matchId: match.id }]);
+    }
+
+    // Sync with Firebase; roll back on error
+    try {
+      await toggleFavorite(user.uid, match);
+    } catch (e) {
+      console.error('Favorite toggle failed:', e);
+      // Roll back
+      if (isCurrentlyFav) {
+        setFavMatchIds(prev => new Set([...prev, match.id]));
+        setFavorites(prev => [...prev, { ...match, matchId: match.id }]);
+      } else {
+        setFavMatchIds(prev => { const s = new Set(prev); s.delete(match.id); return s; });
+        setFavorites(prev => prev.filter(f => f.matchId !== match.id));
+      }
     }
   };
 
@@ -998,6 +1020,25 @@ export default function Home() {
                   </div>
                 ))}
               </div>
+            ) : wcScorers.length > 0 ? (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Meilleurs buteurs · Coupe du Monde</div>
+                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
+                  {wcScorers.map((s, i) => (
+                    <div key={i} style={{
+                      minWidth: 130, padding: '14px 12px', borderRadius: 16, textAlign: 'center',
+                      background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
+                      border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
+                    }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 4 }}>#{i + 1}</div>
+                      {s.teamCrest && <img src={s.teamCrest} alt="" style={{ width: 22, height: 22, objectFit: 'contain', marginBottom: 4 }} />}
+                      <div style={{ fontSize: 12, fontWeight: 800, lineHeight: 1.2 }}>{s.playerName}</div>
+                      <div style={{ fontSize: 18, fontWeight: 900, color: t.accent, marginTop: 4 }}>{s.goals} ⚽</div>
+                      <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{s.assists > 0 ? `${s.assists} passe${s.assists > 1 ? 's' : ''} D.` : `${s.playedMatches} matchs`}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             ) : (
               <div style={{
                 padding: '20px 16px', marginBottom: 16, borderRadius: 14,
@@ -1023,6 +1064,32 @@ export default function Home() {
                     <div style={{ fontSize: 9, color: t.textDim, marginTop: 2 }}>{m.count} votes</div>
                   </div>
                 ))}
+              </div>
+            ) : wcSpectacular.length > 0 ? (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Matchs les plus spectaculaires · Coupe du Monde</div>
+                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
+                  {wcSpectacular.map((m, i) => (
+                    <div key={i} style={{
+                      minWidth: 150, padding: '14px 12px', borderRadius: 16,
+                      background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
+                      border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
+                    }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, color: i === 0 ? '#f1c40f' : t.textDim, marginBottom: 6, textAlign: 'center' }}>#{i + 1} · {m.totalGoals} buts</div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          {m.homeLogo && <img src={m.homeLogo} alt="" style={{ width: 20, height: 20, objectFit: 'contain' }} />}
+                          <div style={{ fontSize: 10, fontWeight: 700, marginTop: 2 }}>{m.home}</div>
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 900, color: t.accent }}>{m.score}</div>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          {m.awayLogo && <img src={m.awayLogo} alt="" style={{ width: 20, height: 20, objectFit: 'contain' }} />}
+                          <div style={{ fontSize: 10, fontWeight: 700, marginTop: 2 }}>{m.away}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
               <div style={{

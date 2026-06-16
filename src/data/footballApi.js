@@ -212,3 +212,57 @@ function mapPosition(pos) {
   };
   return map[pos] || pos.substring(0, 3).toUpperCase();
 }
+
+// ── COMPETITION STATS (for empty-state fallbacks) ──
+
+// Top scorers of a competition (e.g. World Cup). Used to fill the Top Players
+// carousel with real data even when the community hasn't rated anyone yet.
+export async function getTopScorers(leagueCode, limit = 5) {
+  try {
+    const data = await apiFetch(`competitions/${leagueCode}/scorers?limit=${limit}`);
+    const scorers = data.scorers || [];
+    return scorers.map(s => ({
+      playerName: s.player?.name || '?',
+      teamName: s.team?.shortName || s.team?.name || '',
+      teamCrest: s.team?.crest || null,
+      goals: s.goals || 0,
+      assists: s.assists || 0,
+      playedMatches: s.playedMatches || 0,
+    }));
+  } catch (error) {
+    console.error(`Failed to fetch scorers for ${leagueCode}:`, error);
+    return [];
+  }
+}
+
+// Most spectacular finished matches of a competition, ranked by total goals.
+// Used to fill the Top Matches carousel with real data before community votes.
+export async function getSpectacularMatches(leagueCode, limit = 5) {
+  try {
+    // Look back over the whole tournament window (last 60 days)
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(from.getDate() - 60);
+    const fromStr = from.toISOString().split('T')[0];
+    const toStr = today.toISOString().split('T')[0];
+
+    const data = await apiFetch(
+      `competitions/${leagueCode}/matches?dateFrom=${fromStr}&dateTo=${toStr}&status=FINISHED`
+    );
+    const matches = (data.matches || [])
+      .map(m => formatMatch(m))
+      .filter(m => m.status === 'finished');
+
+    // Rank by total goals (most goals = most spectacular)
+    const withGoals = matches.map(m => {
+      const parts = (m.score || '0 - 0').split('-').map(s => parseInt(s.trim()) || 0);
+      const total = (parts[0] || 0) + (parts[1] || 0);
+      return { ...m, totalGoals: total };
+    });
+    withGoals.sort((a, b) => b.totalGoals - a.totalGoals);
+    return withGoals.slice(0, limit);
+  } catch (error) {
+    console.error(`Failed to fetch spectacular matches for ${leagueCode}:`, error);
+    return [];
+  }
+}

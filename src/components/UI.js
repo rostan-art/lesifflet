@@ -48,12 +48,12 @@ export function ThemeToggle({ isDark, onToggle, t }) {
   );
 }
 
-export function BottomNavBar({ isDark, t, bottomNav, onNavigate }) {
+export function BottomNavBar({ isDark, t, bottomNav, onNavigate, favCount = 0 }) {
   return (
     <div style={{
       position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
       width: '100%', maxWidth: 480,
-      background: isDark ? 'rgba(10,14,23,0.95)' : 'rgba(255,255,255,0.95)',
+      background: isDark ? 'rgba(20,17,12,0.95)' : 'rgba(255,255,255,0.95)',
       backdropFilter: 'blur(20px)',
       borderTop: `1px solid ${t.border}`,
       display: 'flex', justifyContent: 'space-around', padding: '8px 0 12px',
@@ -68,10 +68,21 @@ export function BottomNavBar({ isDark, t, bottomNav, onNavigate }) {
         <button key={nav.id} onClick={() => onNavigate(nav.id)} style={{
           background: 'none', border: 'none', cursor: 'pointer',
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-          opacity: bottomNav === nav.id ? 1 : 0.4,
-          transition: 'all 0.2s ease',
+          opacity: bottomNav === nav.id ? 1 : 0.45,
+          transition: 'all 0.2s ease', position: 'relative',
         }}>
-          <span style={{ fontSize: 22 }}>{nav.icon}</span>
+          <span style={{ fontSize: 22, position: 'relative' }}>
+            {nav.icon}
+            {nav.id === 'favorites' && favCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -4, right: -10,
+                minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
+                background: t.live, color: '#fff', fontSize: 9, fontWeight: 800,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: `1.5px solid ${isDark ? '#14110C' : '#fff'}`,
+              }}>{favCount > 99 ? '99+' : favCount}</span>
+            )}
+          </span>
           <span style={{
             fontSize: 10, fontWeight: 700, letterSpacing: 0.5,
             color: bottomNav === nav.id ? t.accent : t.textDim,

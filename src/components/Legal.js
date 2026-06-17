@@ -99,7 +99,7 @@ export function LegalPage({ type, onClose, t }) {
     <div style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 200,
       background: t.gradient, overflowY: 'auto',
-      fontFamily: "'Outfit', 'DM Sans', sans-serif",
+      fontFamily: "'Bricolage Grotesque', 'Inter', sans-serif",
     }}>
       <div style={{ maxWidth: 480, margin: '0 auto', padding: '20px 24px 40px' }}>
         {/* Header */}

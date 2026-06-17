@@ -18,7 +18,7 @@ export const metadata = {
     description: 'Note les joueurs, commente les matchs, compare ton verdict avec la communauté.',
   },
   viewport: 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no',
-  themeColor: '#0a0e17',
+  themeColor: '#FBF6EC',
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },

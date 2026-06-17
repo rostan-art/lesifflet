@@ -4,8 +4,8 @@
   "description": "Note les joueurs, commente les matchs, compare ton verdict avec la communauté foot.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0e17",
-  "theme_color": "#0a0e17",
+  "background_color": "#FBF6EC",
+  "theme_color": "#FBF6EC",
   "orientation": "portrait",
   "icons": [
     {

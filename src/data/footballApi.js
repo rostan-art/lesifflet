@@ -25,6 +25,22 @@ async function apiFetch(path) {
   return data;
 }
 
+// Get official competition emblems (logos) from football-data.org in one call.
+// Returns a map { leagueCode: emblemUrl } — same legal source as club crests.
+export async function getCompetitionEmblems() {
+  try {
+    const data = await apiFetch('competitions');
+    const map = {};
+    (data.competitions || []).forEach(c => {
+      if (c.code && c.emblem) map[c.code] = c.emblem;
+    });
+    return map;
+  } catch (error) {
+    console.error('Failed to fetch competition emblems:', error);
+    return {};
+  }
+}
+
 // Get recent and upcoming matches for a specific league
 export async function getMatchesByLeague(leagueCode) {
   try {

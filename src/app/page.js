@@ -5,7 +5,7 @@ import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { getClubById, POPULAR_CLUBS } from '../data/clubs';
 import { Confetti, WorldCupBanner } from '../components/Festive';
 import { BADGES, LEVELS, getLevelFromPoints, computeUnlockedBadges, WEEKLY_QUESTS } from '../data/badges';
-import { LEAGUES, getMatchesByLeague, getMatchLineups, getTopScorers, getSpectacularMatches } from '../data/footballApi';
+import { LEAGUES, getMatchesByLeague, getMatchLineups, getTopScorers, getSpectacularMatches, getCompetitionEmblems } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { InstallBanner } from '../components/InstallBanner';
 import { LegalPage } from '../components/Legal';
@@ -26,7 +26,7 @@ import {
 } from '../data/firebaseRatings';
 
 export default function Home() {
-  const [isDark, setIsDark] = useState(true);
+  const [isDark, setIsDark] = useState(false);
   const t = isDark ? themes.dark : themes.light;
 
   const [screen, setScreen] = useState('home');
@@ -75,6 +75,7 @@ export default function Home() {
   const [topMatches, setTopMatches] = useState([]);
   const [wcScorers, setWcScorers] = useState([]); // World Cup top scorers (fallback)
   const [wcSpectacular, setWcSpectacular] = useState([]); // World Cup most spectacular matches (fallback)
+  const [leagueEmblems, setLeagueEmblems] = useState({}); // { code: emblemUrl }
 
   // ── COMMENT REPLIES ──
   const [replyTo, setReplyTo] = useState(null); // { id, user, text } of comment being replied to
@@ -172,6 +173,10 @@ export default function Home() {
     // World Cup real-data fallbacks (top scorers + most spectacular matches)
     getTopScorers('WC', 5).then(setWcScorers).catch(() => {});
     getSpectacularMatches('WC', 5).then(setWcSpectacular).catch(() => {});
+    // Official competition emblems (logos)
+    if (Object.keys(leagueEmblems).length === 0) {
+      getCompetitionEmblems().then(setLeagueEmblems).catch(() => {});
+    }
   }, [screen]);
 
   // Load global chat messages
@@ -693,7 +698,7 @@ export default function Home() {
   };
 
   const baseStyle = {
-    fontFamily: "'Outfit', 'DM Sans', sans-serif",
+    fontFamily: "'Bricolage Grotesque', 'Inter', sans-serif",
     background: t.gradient, color: t.text,
     minHeight: '100vh', maxWidth: 480, margin: '0 auto',
     position: 'relative', overflow: 'hidden',
@@ -709,12 +714,12 @@ export default function Home() {
         <div style={{
           position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)',
           zIndex: 9999, maxWidth: 360, width: '90%',
-          background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+          background: `${t.heroGradient}`,
           borderRadius: 16, padding: '14px 18px',
           boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
           display: 'flex', alignItems: 'center', gap: 12,
           animation: 'slideDown 0.4s ease',
-          color: '#0a0e17',
+          color: '#fff',
         }}>
           <div style={{ fontSize: 36 }}>{badgeToast.icon}</div>
           <div style={{ flex: 1 }}>
@@ -765,7 +770,7 @@ export default function Home() {
               {/* Profile avatar */}
               <div onClick={() => user ? setShowProfile(true) : setShowAuthModal(true)} style={{
                 width: 40, height: 40, borderRadius: '50%', cursor: 'pointer',
-                background: user && userProfile?.photoURL ? `url(${userProfile.photoURL}) center/cover` : (user ? `linear-gradient(135deg, ${t.accent}, #00b0ff)` : t.toggleBg),
+                background: user && userProfile?.photoURL ? `url(${userProfile.photoURL}) center/cover` : (user ? `${t.heroGradient}` : t.toggleBg),
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 16, fontWeight: 800, color: user ? '#fff' : t.textDim,
                 border: `2px solid ${user ? t.accent + '44' : t.border}`,
@@ -777,7 +782,7 @@ export default function Home() {
               <div>
                 <h1 style={{
                   fontSize: 32, fontWeight: 900, letterSpacing: -1.5,
-                  background: `linear-gradient(135deg, ${t.text} 0%, ${t.accent} 100%)`,
+                  background: t.heroGradient,
                   WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
                 }}>LeSifflet</h1>
                 <p style={{ color: t.textDim, fontSize: 11, fontWeight: 400, letterSpacing: 2, textTransform: 'uppercase', marginTop: 2 }}>
@@ -827,7 +832,7 @@ export default function Home() {
             }}>
               <div style={{
                 width: 44, height: 44, borderRadius: 12,
-                background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+                background: `${t.heroGradient}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 22, flexShrink: 0,
               }}>🏟️</div>
@@ -869,7 +874,7 @@ export default function Home() {
                 }}>
                   <div style={{
                     width: 64, height: 64, borderRadius: '50%',
-                    background: userProfile?.photoURL ? `url(${userProfile.photoURL}) center/cover` : `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+                    background: userProfile?.photoURL ? `url(${userProfile.photoURL}) center/cover` : `${t.heroGradient}`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 28, fontWeight: 900, color: '#fff', overflow: 'hidden',
                   }}>{!userProfile?.photoURL && (user.displayName || 'S')[0].toUpperCase()}</div>
@@ -877,7 +882,7 @@ export default function Home() {
                     position: 'absolute', bottom: -2, right: -2,
                     width: 24, height: 24, borderRadius: '50%',
                     background: t.accent, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 11, color: '#0a0e17', border: `2px solid ${t.gradient.includes('#0a') ? '#0a0e17' : '#fff'}`,
+                    fontSize: 11, color: '#fff', border: `2px solid ${isDark ? '#14110C' : '#fff'}`,
                   }}>📷</div>
                   <input id="avatar-upload" type="file" accept="image/*" onChange={(e) => {
                     if (e.target.files?.[0]) handlePhotoUpload(e.target.files[0]);
@@ -1208,7 +1213,11 @@ export default function Home() {
                       : `0 2px 8px ${t.shadowColor}`,
                   }}
                 >
-                  <span style={{ fontSize: 26 }}>{league.flag}</span>
+                  {leagueEmblems[league.code] ? (
+                    <img src={leagueEmblems[league.code]} alt={league.name} style={{ width: 30, height: 30, objectFit: 'contain' }} />
+                  ) : (
+                    <span style={{ fontSize: 26 }}>{league.flag}</span>
+                  )}
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{ fontSize: 15, fontWeight: 700 }}>{league.name}</div>
@@ -1245,7 +1254,7 @@ export default function Home() {
             }}>Confidentialité</button>
           </div>
         </div>
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       {showConfetti && <Confetti onDone={() => setShowConfetti(false)} />}
       </>
@@ -1380,7 +1389,7 @@ export default function Home() {
             ))}
           </div>
         </div>
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       </>
     );
@@ -1405,8 +1414,8 @@ export default function Home() {
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Connecte-toi pour sauvegarder tes favoris</div>
             <button onClick={() => setShowAuthModal(true)} style={{
               padding: '12px 28px', borderRadius: 12, border: 'none', marginTop: 8,
-              background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
-              color: '#0a0e17', fontSize: 14, fontWeight: 800, cursor: 'pointer',
+              background: `${t.heroGradient}`,
+              color: '#fff', fontSize: 14, fontWeight: 800, cursor: 'pointer',
             }}>Se connecter</button>
           </div>
         )}
@@ -1479,7 +1488,7 @@ export default function Home() {
         )}
 
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       </>
     );
@@ -1621,7 +1630,7 @@ export default function Home() {
           ))}
         </div>
         <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} t={t} />
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       </>
     );
@@ -1646,7 +1655,7 @@ export default function Home() {
         <div style={{ textAlign: 'center', padding: '10px 24px 24px' }}>
           <div style={{
             width: 72, height: 72, borderRadius: '50%', margin: '0 auto 14px',
-            background: p?.photoURL ? `url(${p.photoURL}) center/cover` : `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
+            background: p?.photoURL ? `url(${p.photoURL}) center/cover` : `${t.heroGradient}`,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: 32, fontWeight: 900, color: '#fff', overflow: 'hidden',
           }}>{!p?.photoURL && (viewedProfile.displayName || '?')[0].toUpperCase()}</div>
@@ -1749,7 +1758,7 @@ export default function Home() {
         ) : (
           <div style={{ textAlign: 'center', padding: '40px 24px', color: t.textDim }}>Chargement...</div>
         )}
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       </>
     );
@@ -1787,7 +1796,11 @@ export default function Home() {
               width: 38, height: 38, borderRadius: 12, fontSize: 18, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>←</button>
-            <span style={{ fontSize: 26 }}>{selectedLeague.flag}</span>
+            {leagueEmblems[selectedLeague.code] ? (
+              <img src={leagueEmblems[selectedLeague.code]} alt={selectedLeague.name} style={{ width: 30, height: 30, objectFit: 'contain' }} />
+            ) : (
+              <span style={{ fontSize: 26 }}>{selectedLeague.flag}</span>
+            )}
             <h2 style={{ fontSize: 20, fontWeight: 800 }}>{selectedLeague.name}</h2>
           </div>
           <ThemeToggle isDark={isDark} onToggle={() => setIsDark(!isDark)} t={t} />
@@ -1916,7 +1929,7 @@ export default function Home() {
             </div>
           ))}
         </div>
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       {showConfetti && <Confetti onDone={() => setShowConfetti(false)} />}
       </>
@@ -2421,15 +2434,15 @@ export default function Home() {
           <div style={{ position: 'fixed', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 'calc(100% - 48px)', maxWidth: 432, zIndex: 50 }}>
             <div style={{
               width: '100%', padding: '12px 0', borderRadius: 14,
-              background: `linear-gradient(135deg, ${t.accent}, #00b0ff)`,
-              color: '#0a0e17', fontSize: 14, fontWeight: 800, textAlign: 'center',
+              background: `${t.heroGradient}`,
+              color: '#fff', fontSize: 14, fontWeight: 800, textAlign: 'center',
               boxShadow: `0 8px 32px ${t.accent}44`,
             }}>
               ✅ {lockedPlayers.size} verdict{lockedPlayers.size > 1 ? 's' : ''} enregistré{lockedPlayers.size > 1 ? 's' : ''}{matchRatingLocked ? ' + match' : ''}
             </div>
           </div>
         )}
-        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} />
+        <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       </>
     );

@@ -10,6 +10,7 @@ import {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
 } from 'firebase/auth';
 
 export function AuthModal({ isOpen, onClose, t }) {
@@ -100,10 +101,28 @@ export function AuthModal({ isOpen, onClose, t }) {
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, provider);
       onClose();
     } catch (e) {
-      setError('Erreur de connexion Google');
+      const code = e?.code || '';
+      // Popup blocked / closed → fall back to full-page redirect (more reliable on desktop)
+      if (code === 'auth/popup-blocked' || code === 'auth/cancelled-popup-request' || code === 'auth/popup-closed-by-user') {
+        try {
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: 'select_account' });
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (e2) {
+          setError('Connexion Google impossible. Réessaie ou utilise ton email.');
+        }
+      } else if (code === 'auth/unauthorized-domain') {
+        setError('Domaine non autorisé dans Firebase. (Config à vérifier)');
+      } else if (code === 'auth/operation-not-allowed') {
+        setError('Connexion Google non activée dans Firebase.');
+      } else {
+        setError(`Erreur Google${code ? ' : ' + code : ''}`);
+      }
     } finally {
       setLoading(false);
     }

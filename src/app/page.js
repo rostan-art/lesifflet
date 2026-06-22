@@ -1110,8 +1110,8 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Meilleurs buteurs · Coupe du Monde</div>
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
                   {wcScorers.map((s, i) => (
-                    <div key={i} onClick={() => openLeagueById('worldcup', 'finished')} style={{
-                      minWidth: 130, padding: '14px 12px', borderRadius: 16, textAlign: 'center', cursor: 'pointer',
+                    <div key={i} style={{
+                      minWidth: 130, padding: '14px 12px', borderRadius: 16, textAlign: 'center', cursor: 'default',
                       background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
                       border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
                     }}>
@@ -1176,7 +1176,7 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Matchs les plus spectaculaires · Coupe du Monde</div>
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
                   {wcSpectacular.map((m, i) => (
-                    <div key={i} onClick={() => openLeagueById('worldcup', 'finished')} style={{
+                    <div key={i} onClick={() => openMatchFromCard(m)} style={{
                       minWidth: 150, padding: '14px 12px', borderRadius: 16, cursor: 'pointer',
                       background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
                       border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,

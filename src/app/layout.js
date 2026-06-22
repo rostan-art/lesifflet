@@ -1,5 +1,6 @@
 import '../styles/globals.css';
 import Script from 'next/script';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 export const metadata = {
   title: 'LeSifflet — La voix des supporters',
@@ -40,7 +41,9 @@ export default function RootLayout({ children }) {
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
       <body>
-        {children}
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
         <Script id="sw-register" strategy="afterInteractive">{`
           if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(() => {});

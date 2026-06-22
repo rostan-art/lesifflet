@@ -187,9 +187,21 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
       };
     };
 
+    // Goals are available from match detail even without lineups
+    const fallbackGoals = (matchData?.goals || []).map(g => ({
+      minute: g.minute != null ? g.minute : null,
+      scorer: g.scorer?.name || '?',
+      assist: g.assist?.name || null,
+      teamId: g.team?.id || null,
+      type: g.type || 'REGULAR',
+    }));
+
     return {
       home: formatSquad(homeData),
       away: formatSquad(awayData),
+      goals: fallbackGoals,
+      homeTeamId: matchData?.homeTeam?.id || homeTeamId || null,
+      awayTeamId: matchData?.awayTeam?.id || awayTeamId || null,
     };
   } catch (error) {
     console.error(`Failed to fetch lineups for match ${matchId}:`, error);

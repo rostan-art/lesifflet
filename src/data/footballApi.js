@@ -25,6 +25,18 @@ async function apiFetch(path) {
   return data;
 }
 
+// Get fresh data for a single match by id (refreshes a favorite's score/status)
+export async function getMatchById(matchId) {
+  try {
+    const data = await apiFetch(`matches/${matchId}`);
+    if (!data || !data.id) return null;
+    return formatMatch(data);
+  } catch (error) {
+    console.error(`Failed to fetch match ${matchId}:`, error);
+    return null;
+  }
+}
+
 // Get official competition emblems (logos) from football-data.org in one call.
 // Returns a map { leagueCode: emblemUrl } — same legal source as club crests.
 export async function getCompetitionEmblems() {
@@ -115,7 +127,7 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
           .sort((a, b) => (posOrder[a.pos] || 9) - (posOrder[b.pos] || 9));
 
         return {
-          teamName: teamObj.shortName || teamObj.name,
+          teamName: translateTeam(teamObj.shortName || teamObj.name),
           teamId: teamObj.id,
           teamLogo: teamObj.crest,
           formation: teamObj.formation || null,
@@ -124,9 +136,21 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
         };
       };
 
+      // Extract goals with scorer name + minute (Deep Data goals array)
+      const goals = (matchData.goals || []).map(g => ({
+        minute: g.minute != null ? g.minute : null,
+        scorer: g.scorer?.name || '?',
+        assist: g.assist?.name || null,
+        teamId: g.team?.id || null,
+        type: g.type || 'REGULAR',
+      }));
+
       return {
         home: formatLineup(matchData.homeTeam),
         away: formatLineup(matchData.awayTeam),
+        goals,
+        homeTeamId: matchData.homeTeam?.id || null,
+        awayTeamId: matchData.awayTeam?.id || null,
       };
     }
 
@@ -154,7 +178,7 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
         .sort((a, b) => (posOrder[a.pos] || 9) - (posOrder[b.pos] || 9));
 
       return {
-        teamName: teamData.shortName || teamData.name,
+        teamName: translateTeam(teamData.shortName || teamData.name),
         teamId: teamData.id,
         teamLogo: teamData.crest,
         formation: null,
@@ -174,6 +198,36 @@ export async function getMatchLineups(matchId, homeTeamId, awayTeamId) {
 }
 
 // Format a match from football-data.org into our app format
+// Translate national team names to French (World Cup uses English names)
+const COUNTRY_FR = {
+  'Germany': 'Allemagne', 'Spain': 'Espagne', 'England': 'Angleterre',
+  'Belgium': 'Belgique', 'Croatia': 'Croatie', 'Denmark': 'Danemark',
+  'Netherlands': 'Pays-Bas', 'Switzerland': 'Suisse', 'Wales': 'Pays de Galles',
+  'Brazil': 'Brésil', 'Argentina': 'Argentine', 'Mexico': 'Mexique',
+  'United States': 'États-Unis', 'USA': 'États-Unis', 'Canada': 'Canada',
+  'Morocco': 'Maroc', 'Senegal': 'Sénégal', 'Tunisia': 'Tunisie',
+  'Cameroon': 'Cameroun', 'Ghana': 'Ghana', 'Egypt': 'Égypte',
+  'Ivory Coast': 'Côte d\'Ivoire', 'Algeria': 'Algérie', 'Nigeria': 'Nigéria',
+  'South Korea': 'Corée du Sud', 'Japan': 'Japon', 'Australia': 'Australie',
+  'Saudi Arabia': 'Arabie Saoudite', 'Iran': 'Iran', 'Qatar': 'Qatar',
+  'Poland': 'Pologne', 'Portugal': 'Portugal', 'Serbia': 'Serbie',
+  'Sweden': 'Suède', 'Norway': 'Norvège', 'Austria': 'Autriche',
+  'Czech Republic': 'République Tchèque', 'Ukraine': 'Ukraine', 'Turkey': 'Turquie',
+  'Scotland': 'Écosse', 'Ireland': 'Irlande', 'Greece': 'Grèce',
+  'Italy': 'Italie', 'France': 'France', 'Uruguay': 'Uruguay',
+  'Colombia': 'Colombie', 'Chile': 'Chili', 'Peru': 'Pérou',
+  'Ecuador': 'Équateur', 'Paraguay': 'Paraguay', 'Costa Rica': 'Costa Rica',
+  'Panama': 'Panama', 'Jamaica': 'Jamaïque', 'New Zealand': 'Nouvelle-Zélande',
+  'South Africa': 'Afrique du Sud', 'Cape Verde': 'Cap-Vert', 'Russia': 'Russie',
+  'Hungary': 'Hongrie', 'Romania': 'Roumanie', 'Slovakia': 'Slovaquie',
+  'Slovenia': 'Slovénie', 'Iceland': 'Islande', 'Finland': 'Finlande',
+};
+
+function translateTeam(name) {
+  if (!name) return name;
+  return COUNTRY_FR[name] || name;
+}
+
 function formatMatch(match) {
   let status = 'upcoming';
   let minute = '';
@@ -200,10 +254,10 @@ function formatMatch(match) {
   return {
     id: match.id.toString(),
     fixtureId: match.id,
-    home: match.homeTeam?.shortName || match.homeTeam?.name || '?',
+    home: translateTeam(match.homeTeam?.shortName || match.homeTeam?.name) || '?',
     homeId: match.homeTeam?.id,
     homeLogo: match.homeTeam?.crest || null,
-    away: match.awayTeam?.shortName || match.awayTeam?.name || '?',
+    away: translateTeam(match.awayTeam?.shortName || match.awayTeam?.name) || '?',
     awayId: match.awayTeam?.id,
     awayLogo: match.awayTeam?.crest || null,
     score: scoreDisplay,
@@ -239,7 +293,7 @@ export async function getTopScorers(leagueCode, limit = 5) {
     const scorers = data.scorers || [];
     return scorers.map(s => ({
       playerName: s.player?.name || '?',
-      teamName: s.team?.shortName || s.team?.name || '',
+      teamName: translateTeam(s.team?.shortName || s.team?.name) || '',
       teamCrest: s.team?.crest || null,
       goals: s.goals || 0,
       assists: s.assists || 0,

@@ -5,7 +5,7 @@ import { REACTION_EMOJIS, BADGES_INFO } from '../data/mockData';
 import { getClubById, POPULAR_CLUBS } from '../data/clubs';
 import { Confetti, WorldCupBanner } from '../components/Festive';
 import { BADGES, LEVELS, getLevelFromPoints, computeUnlockedBadges, WEEKLY_QUESTS } from '../data/badges';
-import { LEAGUES, getMatchesByLeague, getMatchLineups, getTopScorers, getSpectacularMatches, getCompetitionEmblems } from '../data/footballApi';
+import { LEAGUES, getMatchesByLeague, getMatchLineups, getTopScorers, getSpectacularMatches, getCompetitionEmblems, getMatchById } from '../data/footballApi';
 import { StarRating, PulsingDot, ThemeToggle, BottomNavBar } from '../components/UI';
 import { InstallBanner } from '../components/InstallBanner';
 import { LegalPage } from '../components/Legal';
@@ -57,6 +57,7 @@ export default function Home() {
 
   // ── FAVORITES STATE ──
   const [favorites, setFavorites] = useState([]); // list of favorite match objects
+  const [refreshedFav, setRefreshedFav] = useState(null); // fresh data for the next favorite match
   const [favMatchIds, setFavMatchIds] = useState(new Set()); // quick lookup set
 
   // ── PROFILE STATE ──
@@ -82,6 +83,7 @@ export default function Home() {
 
   // ── LEAGUE FILTER ──
   const [leagueFilter, setLeagueFilter] = useState(null); // 'live' | 'upcoming' | 'finished'
+  const [dateFilter, setDateFilter] = useState(''); // 'YYYY-MM-DD' to filter matches by date
 
   // ── BADGE TOAST ──
   const [badgeToast, setBadgeToast] = useState(null); // { icon, name, bonus }
@@ -179,6 +181,23 @@ export default function Home() {
     }
   }, [screen]);
 
+  // Refresh the next favorite match (soonest by date) so its score/status is live
+  useEffect(() => {
+    if (screen !== 'home' || favorites.length === 0) { setRefreshedFav(null); return; }
+    const sorted = [...favorites].sort((a, b) => new Date(a.utcDate || 0) - new Date(b.utcDate || 0));
+    const now = Date.now();
+    const next = sorted.find(f => {
+      const d = new Date(f.utcDate || 0).getTime();
+      return d > now - 3 * 3600 * 1000; // upcoming or within live window
+    }) || sorted[sorted.length - 1];
+    if (!next || (!next.matchId && !next.id)) return;
+    let cancelled = false;
+    getMatchById(next.matchId || next.id).then(fresh => {
+      if (!cancelled && fresh) setRefreshedFav(fresh);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [screen, favorites]);
+
   // Load global chat messages
   useEffect(() => {
     if (screen !== 'globalchat') return;
@@ -194,31 +213,36 @@ export default function Home() {
   // View another user's profile
   // Open a match screen from a match-like object (used by Top Matches carousels)
   const openMatchFromCard = (m) => {
-    if (!m) return;
-    const matchObj = {
-      id: m.id || m.matchId,
-      fixtureId: m.fixtureId || '',
-      home: m.home, away: m.away,
-      homeId: m.homeId || '', awayId: m.awayId || '',
-      homeLogo: m.homeLogo || '', awayLogo: m.awayLogo || '',
-      score: m.score || '', date: m.date || '', utcDate: m.utcDate || '',
-      time: m.time || '', status: m.status || 'finished',
-      minute: m.minute || '', matchday: m.matchday || '', round: m.round || '',
-    };
-    if (!matchObj.id || !matchObj.home) return; // not enough data
-    setSelectedMatch(matchObj);
-    setScreen('match');
-    setSelectedTeamTab('home');
-    setBottomNav('home');
-    incrementMatchViews(matchObj.id).catch(() => {});
-    setMatchViews(prev => ({ ...prev, [matchObj.id]: (prev[matchObj.id] || 0) + 1 }));
+    try {
+      if (!m) return;
+      const matchObj = {
+        id: m.id || m.matchId,
+        fixtureId: m.fixtureId || '',
+        home: m.home, away: m.away,
+        homeId: m.homeId || '', awayId: m.awayId || '',
+        homeLogo: m.homeLogo || '', awayLogo: m.awayLogo || '',
+        score: m.score || '', date: m.date || '', utcDate: m.utcDate || '',
+        time: m.time || '', status: m.status || 'finished',
+        minute: m.minute || '', matchday: m.matchday || '', round: m.round || '',
+      };
+      if (!matchObj.id || !matchObj.home) return; // not enough data
+      setSelectedMatch(matchObj);
+      setScreen('match');
+      setSelectedTeamTab('home');
+      setBottomNav('home');
+      incrementMatchViews(matchObj.id).catch(() => {});
+      setMatchViews(prev => ({ ...prev, [matchObj.id]: (prev[matchObj.id] || 0) + 1 }));
+    } catch (e) {
+      console.error('openMatchFromCard error:', e);
+    }
   };
 
-  // Open a league screen by its id (used by Top Scorers carousel)
-  const openLeagueById = (leagueId) => {
+  // Open a league screen by its id, optionally with a status filter
+  const openLeagueById = (leagueId, filter = null) => {
     const league = LEAGUES.find(l => l.id === leagueId);
     if (!league) return;
     setSelectedLeague(league);
+    setLeagueFilter(filter);
     setScreen('league');
     setBottomNav('home');
   };
@@ -439,86 +463,88 @@ export default function Home() {
     }
   };
 
-  const ratePlayer = async (pid, r) => {
+  // Click a rating = draft only (no save, no lock). Validation happens via button.
+  const ratePlayer = (pid, r) => {
     if (!user) { setShowAuthModal(true); return; }
-    if (lockedPlayers.has(pid)) return; // already locked, can't change
-    if (savingPlayer) return; // avoid double-submit
-
-    setSavingPlayer(pid);
+    if (lockedPlayers.has(pid)) return; // already validated, can't change
     setPlayerRatings(prev => ({ ...prev, [pid]: r }));
-
-    try {
-      // Find player name for metadata
-      const allP = [...(getPlayers().home || []), ...(getPlayers().away || [])];
-      const playerObj = allP.find(p => p.id === pid);
-      // Save this single player's rating permanently (with metadata for clickable top players)
-      await savePlayerRating(user.uid, selectedMatch.id, pid, r, {
-        playerName: playerObj?.name || '',
-        home: selectedMatch.home, away: selectedMatch.away,
-        homeLogo: selectedMatch.homeLogo, awayLogo: selectedMatch.awayLogo,
-        score: selectedMatch.score,
-      });
-
-      // Compute points vs current community average for this player
-      const avgs = await getPlayerAverages(selectedMatch.id);
-      setCommunityPlayerAvgs(avgs);
-      const avg = avgs[pid]?.average || 0;
-      const pts = calculatePoints(r, avg);
-      await addUserPoints(user.uid, pts, selectedMatch.id, user.displayName);
-      if (pts === 50) await incrementLynxCount(user.uid);
-
-      // Lock this player
-      setLockedPlayers(prev => new Set([...prev, pid]));
-
-      // Whistle + points feedback
-      playWhistle();
-      setPointsEarned(pts);
-      setShowConfirmation(true);
-      setTimeout(() => setShowConfirmation(false), 2000);
-
-      // Refresh user points + badges
-      const profile = await getUserProfile(user.uid);
-      setUserProfile(profile);
-      setUserPoints(profile.points || 0);
-      checkBadges();
-    } catch (e) {
-      console.error('Error saving player rating:', e);
-      // Roll back optimistic rating on failure
-      setPlayerRatings(prev => { const c = { ...prev }; delete c[pid]; return c; });
-    } finally {
-      setSavingPlayer(null);
-    }
   };
 
-  // Rate the match itself (locks once submitted)
-  const rateMatchNow = async (r) => {
+  // Set the match rating as a draft (no save until validation)
+  const rateMatchNow = (r) => {
     if (!user) { setShowAuthModal(true); return; }
     if (matchRatingLocked) return;
     setMatchRating(r);
+  };
+
+  // Validate & save all drafted (not-yet-locked) ratings at once
+  const validateRatings = async () => {
+    if (!user) { setShowAuthModal(true); return; }
+    if (savingPlayer) return;
+    setSavingPlayer('all');
+
     try {
-      await saveMatchRating(user.uid, selectedMatch.id, r, {
-        home: selectedMatch.home, away: selectedMatch.away,
-        homeLogo: selectedMatch.homeLogo, awayLogo: selectedMatch.awayLogo,
-        score: selectedMatch.score, status: selectedMatch.status,
-        date: selectedMatch.date, utcDate: selectedMatch.utcDate, time: selectedMatch.time,
-        homeId: selectedMatch.homeId, awayId: selectedMatch.awayId,
-        fixtureId: selectedMatch.fixtureId, leagueName: selectedLeague?.name || '',
-      });
-      const matchAvg = await getMatchAverage(selectedMatch.id);
-      setCommunityMatchAvg(matchAvg);
-      const pts = calculatePoints(r, matchAvg.average);
-      await addUserPoints(user.uid, pts, selectedMatch.id, user.displayName);
-      setMatchRatingLocked(true);
+      const allP = [...(getPlayers().home || []), ...(getPlayers().away || [])];
+      // Players rated but not yet locked
+      const toSave = Object.keys(playerRatings).filter(pid => !lockedPlayers.has(pid));
+      const matchToSave = matchRating > 0 && !matchRatingLocked;
+
+      let totalPts = 0;
+
+      // Save each drafted player rating
+      for (const pid of toSave) {
+        const r = playerRatings[pid];
+        const playerObj = allP.find(p => p.id === pid);
+        await savePlayerRating(user.uid, selectedMatch.id, pid, r, {
+          playerName: playerObj?.name || '',
+          home: selectedMatch.home, away: selectedMatch.away,
+          homeLogo: selectedMatch.homeLogo, awayLogo: selectedMatch.awayLogo,
+          score: selectedMatch.score,
+        });
+        const avgs = await getPlayerAverages(selectedMatch.id);
+        const avg = avgs[pid]?.average || 0;
+        const pts = calculatePoints(r, avg);
+        totalPts += pts;
+        await addUserPoints(user.uid, pts, selectedMatch.id, user.displayName);
+        if (pts === 50) await incrementLynxCount(user.uid);
+      }
+
+      // Save match rating if drafted
+      if (matchToSave) {
+        await saveMatchRating(user.uid, selectedMatch.id, matchRating, {
+          home: selectedMatch.home, away: selectedMatch.away,
+          homeLogo: selectedMatch.homeLogo, awayLogo: selectedMatch.awayLogo,
+          score: selectedMatch.score, status: selectedMatch.status,
+          date: selectedMatch.date, utcDate: selectedMatch.utcDate, time: selectedMatch.time,
+          homeId: selectedMatch.homeId, awayId: selectedMatch.awayId,
+          fixtureId: selectedMatch.fixtureId, leagueName: selectedLeague?.name || '',
+        });
+        const matchAvg = await getMatchAverage(selectedMatch.id);
+        const pts = calculatePoints(matchRating, matchAvg.average);
+        totalPts += pts;
+        await addUserPoints(user.uid, pts, selectedMatch.id, user.displayName);
+        setMatchRatingLocked(true);
+      }
+
+      // Lock everything that was just saved
+      setLockedPlayers(prev => new Set([...prev, ...toSave]));
+
+      // Refresh community averages + feedback
+      const finalAvgs = await getPlayerAverages(selectedMatch.id);
+      setCommunityPlayerAvgs(finalAvgs);
       playWhistle();
-      setPointsEarned(pts);
+      setPointsEarned(totalPts);
       setShowConfirmation(true);
-      setTimeout(() => setShowConfirmation(false), 2000);
+      setTimeout(() => setShowConfirmation(false), 2500);
+
       const profile = await getUserProfile(user.uid);
       setUserProfile(profile);
       setUserPoints(profile.points || 0);
       checkBadges();
     } catch (e) {
-      console.error('Error saving match rating:', e);
+      console.error('Error validating ratings:', e);
+    } finally {
+      setSavingPlayer(null);
     }
   };
 
@@ -682,7 +708,7 @@ export default function Home() {
 
   const goBack = () => {
     if (screen === 'match') { setScreen('league'); setSelectedMatch(null); setActiveTab('players'); setPlayerRatings({}); setLockedPlayers(new Set()); setMatchRatingLocked(false); setMatchRating(0); setRealLineups(null); setCommunityPlayerAvgs({}); setCommunityMatchAvg({ average: 0, count: 0 }); setPointsEarned(0); setDraftSaved(false); setComments([]); }
-    else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); setLeagueFilter(null); }
+    else if (screen === 'league') { setScreen('home'); setSelectedLeague(null); setLeagueFilter(null); setDateFilter(''); }
     else if (screen === 'leaderboard') { setScreen('home'); }
     else if (screen === 'favorites') { setScreen('home'); }
     else if (screen === 'globalchat') { setScreen('home'); }
@@ -795,17 +821,20 @@ export default function Home() {
         </div>
         {/* Hero card — next favorite match or CTA */}
         {(() => {
-          const nextFav = favorites.find(f => f.status === 'upcoming' || f.status === 'live');
+          // Prefer freshly-refreshed data; fall back to stored favorite
+          const stored = favorites.find(f => f.status === 'upcoming' || f.status === 'live')
+            || [...favorites].sort((a, b) => new Date(b.utcDate || 0) - new Date(a.utcDate || 0))[0];
+          const nextFav = refreshedFav || stored;
           if (nextFav) {
             return (
-              <div style={{
+              <div onClick={() => openMatchFromCard(nextFav)} style={{
                 margin: '0 24px 20px', padding: '18px 20px', borderRadius: 18,
                 background: `linear-gradient(135deg, ${t.accent}18, ${t.accent}08)`,
                 border: `1px solid ${t.accent}33`,
-                position: 'relative', overflow: 'hidden',
+                position: 'relative', overflow: 'hidden', cursor: 'pointer',
               }}>
                 <div style={{ fontSize: 10, fontWeight: 800, color: t.accent, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>
-                  {nextFav.status === 'live' ? '🔴 En direct' : '⭐ Prochain match favori'}
+                  {nextFav.status === 'live' ? '🔴 En direct' : nextFav.status === 'finished' ? '⭐ Ton match favori · Terminé' : '⭐ Prochain match favori'}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ flex: 1, textAlign: 'center' }}>
@@ -813,8 +842,11 @@ export default function Home() {
                     <div style={{ fontSize: 14, fontWeight: 800 }}>{nextFav.home}</div>
                   </div>
                   <div style={{ textAlign: 'center', minWidth: 80 }}>
-                    <div style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{nextFav.time || 'vs'}</div>
-                    {nextFav.date && <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>{nextFav.date}</div>}
+                    {(nextFav.status === 'live' || nextFav.status === 'finished') && nextFav.score && nextFav.score !== '- - -'
+                      ? <div style={{ fontSize: 22, fontWeight: 900, color: t.accent }}>{nextFav.score}</div>
+                      : <div style={{ fontSize: 18, fontWeight: 900, color: t.accent }}>{nextFav.time || 'vs'}</div>}
+                    {nextFav.status === 'live' && nextFav.minute && <div style={{ fontSize: 10, color: t.live, marginTop: 2, fontWeight: 700 }}>{nextFav.minute}</div>}
+                    {nextFav.status !== 'live' && nextFav.date && <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>{nextFav.date}</div>}
                   </div>
                   <div style={{ flex: 1, textAlign: 'center' }}>
                     {nextFav.awayLogo && <img src={nextFav.awayLogo} alt="" style={{ width: 28, height: 28, objectFit: 'contain', marginBottom: 4 }} />}
@@ -1078,7 +1110,7 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Meilleurs buteurs · Coupe du Monde</div>
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
                   {wcScorers.map((s, i) => (
-                    <div key={i} onClick={() => openLeagueById('worldcup')} style={{
+                    <div key={i} onClick={() => openLeagueById('worldcup', 'finished')} style={{
                       minWidth: 130, padding: '14px 12px', borderRadius: 16, textAlign: 'center', cursor: 'pointer',
                       background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
                       border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
@@ -1144,7 +1176,7 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: '#f1c40f', fontWeight: 700, marginBottom: 8 }}>🌍 Matchs les plus spectaculaires · Coupe du Monde</div>
                 <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 }}>
                   {wcSpectacular.map((m, i) => (
-                    <div key={i} onClick={() => openMatchFromCard(m)} style={{
+                    <div key={i} onClick={() => openLeagueById('worldcup', 'finished')} style={{
                       minWidth: 150, padding: '14px 12px', borderRadius: 16, cursor: 'pointer',
                       background: i === 0 ? 'rgba(241,196,15,0.1)' : t.card,
                       border: `1px solid ${i === 0 ? 'rgba(241,196,15,0.4)' : t.border}`,
@@ -1783,7 +1815,14 @@ export default function Home() {
     // Default filter: live > upcoming > finished
     const defaultFilter = liveMatches.length > 0 ? 'live' : upcomingMatches.length > 0 ? 'upcoming' : 'finished';
     const activeFilter = leagueFilter || defaultFilter;
-    const filteredMatches = activeFilter === 'live' ? liveMatches : activeFilter === 'upcoming' ? upcomingMatches : finishedMatches;
+    let filteredMatches = activeFilter === 'live' ? liveMatches : activeFilter === 'upcoming' ? upcomingMatches : finishedMatches;
+    // Optional date filter (calendar picker)
+    if (dateFilter) {
+      filteredMatches = allMatches.filter(m => {
+        if (!m.utcDate) return false;
+        return new Date(m.utcDate).toISOString().split('T')[0] === dateFilter;
+      }).sort((a, b) => new Date(a.utcDate || 0) - new Date(b.utcDate || 0));
+    }
 
     return (
       <>
@@ -1830,6 +1869,35 @@ export default function Home() {
                 <div style={{ fontSize: 10, color: t.textDim, marginTop: 2 }}>{f.count}</div>
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Date picker */}
+        {!isLoading && allMatches.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 24px 14px' }}>
+            <label style={{
+              position: 'relative', display: 'flex', alignItems: 'center', gap: 8, flex: 1,
+              padding: '10px 14px', borderRadius: 12, cursor: 'pointer',
+              background: dateFilter ? t.accentDim : t.toggleBg,
+              border: `1px solid ${dateFilter ? t.accent + '44' : t.border}`,
+            }}>
+              <span style={{ fontSize: 16 }}>📅</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: dateFilter ? t.accent : t.textDim, flex: 1 }}>
+                {dateFilter ? new Date(dateFilter + 'T12:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Choisir une date'}
+              </span>
+              <input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                style={{ position: 'absolute', inset: 0, opacity: 0, width: '100%', height: '100%', cursor: 'pointer' }}
+              />
+            </label>
+            {dateFilter && (
+              <button onClick={() => setDateFilter('')} style={{
+                padding: '10px 14px', borderRadius: 12, border: `1px solid ${t.border}`,
+                background: t.toggleBg, color: t.text, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>✕</button>
+            )}
           </div>
         )}
 
@@ -2033,7 +2101,27 @@ export default function Home() {
             </div>
           )}
         </div>
-        {/* Draft mode banner */}
+        {/* Buteurs (goal scorers with minute) */}
+        {realLineups?.goals && realLineups.goals.length > 0 && (
+          <div style={{ margin: '0 24px 4px', padding: '12px 16px', borderRadius: 14, background: t.card, border: `1px solid ${t.border}` }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase', color: t.textDim, marginBottom: 8 }}>⚽ Buteurs</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {realLineups.goals.map((g, i) => {
+                const isHome = g.teamId && realLineups.homeTeamId && g.teamId === realLineups.homeTeamId;
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: isHome ? 'flex-start' : 'flex-end', gap: 8 }}>
+                    {isHome && <span style={{ fontSize: 12, fontWeight: 800, color: t.accent, minWidth: 32 }}>{g.minute != null ? g.minute + "'" : ''}</span>}
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      ⚽ {g.scorer}{g.type === 'PENALTY' ? ' (P)' : g.type === 'OWN' ? ' (csc)' : ''}
+                      {g.assist && <span style={{ fontSize: 11, color: t.textDim, fontWeight: 400 }}> · passe {g.assist}</span>}
+                    </span>
+                    {!isHome && <span style={{ fontSize: 12, fontWeight: 800, color: t.accent, minWidth: 32, textAlign: 'right' }}>{g.minute != null ? g.minute + "'" : ''}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         {isDraftMode() && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -2430,18 +2518,41 @@ export default function Home() {
             </div>
           )}
         </div>
-        {canRate() && lockedPlayers.size > 0 && (
-          <div style={{ position: 'fixed', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 'calc(100% - 48px)', maxWidth: 432, zIndex: 50 }}>
-            <div style={{
-              width: '100%', padding: '12px 0', borderRadius: 14,
-              background: `${t.heroGradient}`,
-              color: '#fff', fontSize: 14, fontWeight: 800, textAlign: 'center',
-              boxShadow: `0 8px 32px ${t.accent}44`,
-            }}>
-              ✅ {lockedPlayers.size} verdict{lockedPlayers.size > 1 ? 's' : ''} enregistré{lockedPlayers.size > 1 ? 's' : ''}{matchRatingLocked ? ' + match' : ''}
-            </div>
-          </div>
-        )}
+        {canRate() && (() => {
+          const pendingPlayers = Object.keys(playerRatings).filter(pid => !lockedPlayers.has(pid)).length;
+          const pendingMatch = matchRating > 0 && !matchRatingLocked;
+          const pending = pendingPlayers + (pendingMatch ? 1 : 0);
+          if (pending > 0) {
+            return (
+              <div style={{ position: 'fixed', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 'calc(100% - 48px)', maxWidth: 432, zIndex: 50 }}>
+                <button onClick={validateRatings} disabled={savingPlayer === 'all'} style={{
+                  width: '100%', padding: '15px 0', borderRadius: 14, border: 'none',
+                  background: t.heroGradient, color: '#fff', fontSize: 15, fontWeight: 800,
+                  cursor: savingPlayer === 'all' ? 'wait' : 'pointer', letterSpacing: 0.3,
+                  boxShadow: `0 8px 32px ${t.accent}55`, opacity: savingPlayer === 'all' ? 0.7 : 1,
+                }}>
+                  {savingPlayer === 'all' ? '⏳ Validation...' : `🏁 Valider mon choix (${pending})`}
+                </button>
+                <div style={{ textAlign: 'center', marginTop: 6, fontSize: 10, color: t.textDim }}>
+                  Une fois validé, ton verdict est définitif
+                </div>
+              </div>
+            );
+          }
+          if (lockedPlayers.size > 0 || matchRatingLocked) {
+            return (
+              <div style={{ position: 'fixed', bottom: 68, left: '50%', transform: 'translateX(-50%)', width: 'calc(100% - 48px)', maxWidth: 432, zIndex: 50 }}>
+                <div style={{
+                  width: '100%', padding: '12px 0', borderRadius: 14, background: t.heroGradient,
+                  color: '#fff', fontSize: 14, fontWeight: 800, textAlign: 'center', boxShadow: `0 8px 32px ${t.accent}44`,
+                }}>
+                  ✅ {lockedPlayers.size} verdict{lockedPlayers.size > 1 ? 's' : ''} validé{lockedPlayers.size > 1 ? 's' : ''}{matchRatingLocked ? ' + match' : ''}
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
         <BottomNavBar isDark={isDark} t={t} bottomNav={bottomNav} onNavigate={navigateTo} favCount={favorites.length} />
       </div>
       </>
